@@ -1,0 +1,1004 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Re-ID Pipeline</title>
+<style>
+  :root{
+    /* Light mode — nền off-white, 1 accent xanh, họ xám trung tính nhất quán */
+    --bg:#f4f5f7; --surface:#ffffff; --surface-2:#f8fafc; --panel:#ffffff;
+    --card:#eef1f5; --border:#e4e8ee; --border-2:#d6dbe3;
+    --text:#1b2027; --dim:#646c79; --faint:#9aa2ae;
+    --accent:#2f6fed; --accent-weak:#eaf1fe; --accent-press:#2659c6;
+    --ok:#1a9d54; --ok-weak:#e8f6ee; --bad:#d23b3b; --bad-weak:#fbeaea;
+    --warn:#b06a12; --warn-weak:#fbf1e3;
+    --blue:#2f6fed;
+    --radius:12px; --radius-sm:8px;
+    --shadow-sm:0 1px 2px rgba(20,24,33,.06),0 1px 3px rgba(20,24,33,.05);
+    --shadow:0 8px 26px -12px rgba(20,24,33,.22);
+    --ring:0 0 0 3px rgba(47,111,237,.28);
+    --t:150ms cubic-bezier(.2,.6,.2,1);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{font-family:ui-sans-serif,system-ui,"Segoe UI",-apple-system,sans-serif;
+       background:var(--bg);color:var(--text);height:100dvh;display:flex;flex-direction:column;overflow:hidden;
+       -webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums;letter-spacing:-.011em;font-size:14px}
+  code{font-variant-numeric:tabular-nums;font-family:ui-monospace,"SFMono-Regular",Menlo,monospace;
+       font-size:.86em;color:var(--dim);background:var(--card);padding:1px 5px;border-radius:5px}
+  h1{font-size:15px;font-weight:650;letter-spacing:-.02em}
+  h2{font-size:18px;font-weight:650;letter-spacing:-.02em;margin-bottom:12px}
+  h3{font-size:13px;font-weight:650}
+  .muted{color:var(--dim)}
+
+  /* ── Buttons ── */
+  button{font-family:inherit;border:1px solid var(--border-2);border-radius:var(--radius-sm);
+         padding:8px 14px;cursor:pointer;font-size:13.5px;font-weight:560;color:var(--text);
+         background:var(--surface);box-shadow:var(--shadow-sm);
+         transition:filter var(--t),transform var(--t),box-shadow var(--t),background var(--t),border-color var(--t)}
+  button:hover{background:var(--surface-2);border-color:var(--border-2)}
+  button:active{transform:translateY(1px) scale(.99)}
+  button:focus-visible{outline:none;box-shadow:var(--ring)}
+  button:disabled{opacity:.5;cursor:not-allowed;transform:none;filter:none}
+  button.primary{background:var(--accent);border-color:transparent;color:#fff}
+  button.primary:hover{filter:brightness(1.06);background:var(--accent)}
+  button.primary:active{background:var(--accent-press)}
+  button.green{background:var(--ok);border-color:transparent;color:#fff}
+  button.green:hover{filter:brightness(1.06)}
+  button.warn{background:var(--warn);border-color:transparent;color:#fff}
+  button.warn:hover{filter:brightness(1.06)}
+  button.red{background:var(--bad);border-color:transparent;color:#fff}
+  button.red:hover{filter:brightness(1.06)}
+  button.ghost{background:transparent;border-color:var(--border-2)}
+  .iconbtn{width:36px;height:36px;padding:0;font-size:15px;display:inline-flex;align-items:center;justify-content:center}
+
+  /* ── Inputs ── */
+  input{font-family:inherit;font-variant-numeric:tabular-nums;background:var(--surface);
+        color:var(--text);border:1px solid var(--border-2);border-radius:var(--radius-sm);
+        transition:border-color var(--t),box-shadow var(--t)}
+  input:focus,input:focus-visible{outline:none;border-color:var(--accent);box-shadow:var(--ring)}
+  ::selection{background:rgba(47,111,237,.18)}
+
+  /* ── App bar ── */
+  header{background:var(--surface);padding:0 18px;height:52px;display:flex;align-items:center;gap:18px;
+         border-bottom:1px solid var(--border);flex-shrink:0;z-index:5}
+  .brand{display:flex;align-items:center;gap:8px;font-weight:650}
+  .brand .dot{width:9px;height:9px;border-radius:3px;background:var(--accent)}
+  .steps{display:flex;gap:4px;font-size:12px}
+  .step{display:flex;align-items:center;gap:6px;padding:5px 11px;border-radius:99px;
+        background:var(--card);color:var(--dim);font-weight:560;transition:background var(--t),color var(--t)}
+  .step .n{display:inline-flex;width:17px;height:17px;border-radius:50%;background:var(--border-2);color:var(--surface);
+           align-items:center;justify-content:center;font-size:11px}
+  .step.active{background:var(--accent-weak);color:var(--accent)}
+  .step.active .n{background:var(--accent);color:#fff}
+  .step.done{background:var(--ok-weak);color:var(--ok)}
+  .step.done .n{background:var(--ok);color:#fff}
+  .ds-info{margin-left:auto;font-size:12px;color:var(--dim);
+           background:var(--surface-2);border:1px solid var(--border);padding:5px 12px;border-radius:99px}
+  .hreset{padding:5px 11px;font-size:12px;color:var(--bad);border-color:var(--bad);background:transparent;box-shadow:none}
+  .hreset:hover{background:var(--bad-weak)}
+
+  main{flex:1;overflow:hidden;display:flex}
+  #view{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden}
+
+  /* ── Page (idle / processing) ── */
+  .page{flex:1;overflow:auto;padding:32px 24px}
+  .page-wrap{max-width:760px;margin:0 auto}
+  .box{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+       padding:20px;margin-bottom:16px;box-shadow:var(--shadow-sm)}
+  .vid-row{display:flex;align-items:center;gap:12px;padding:11px 4px;border-bottom:1px solid var(--border)}
+  .vid-row:last-child{border-bottom:none}
+  .vid-row input{width:64px;padding:6px;text-align:center;font-weight:650;color:var(--accent)}
+  pre.log{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);
+          padding:14px;font-size:12px;line-height:1.55;max-height:52vh;overflow:auto;white-space:pre-wrap;
+          color:#384150;font-family:ui-monospace,Menlo,monospace}
+  .barbg{height:8px;background:var(--card);border-radius:99px;overflow:hidden;margin:10px 0}
+  .barbg>div{height:100%;background:var(--accent);transition:width .2s}
+  .statbox{border-left:3px solid var(--accent)}
+  .statgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(108px,1fr));gap:10px}
+  .statgrid>div{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:9px 10px;text-align:center}
+  .statgrid>div b{display:block;font-size:22px;font-weight:750;color:var(--text);line-height:1.1}
+  .statgrid>div span{font-size:11px;color:var(--dim)}
+  .statgrid>div.ok b{color:var(--ok)}
+  .statgrid>div.warn b{color:var(--warn)}
+
+  /* ── Label workspace ── */
+  .labelbar{display:flex;align-items:center;gap:14px;padding:10px 18px;background:var(--surface);
+            border-bottom:1px solid var(--border);flex-shrink:0}
+  .camfilter{display:flex;gap:6px;flex-wrap:wrap}
+  .camfilter button{padding:6px 12px;font-size:13px}
+  .navcluster{display:flex;align-items:center;gap:10px;margin:0 auto}
+  .pos{min-width:120px;text-align:center;font-weight:600;font-size:13.5px}
+
+  .workspace{flex:1;display:flex;min-height:0}
+  .canvas{flex:1;overflow:auto;padding:20px;display:flex;flex-direction:column;align-items:center;gap:14px}
+  .montage-box{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+               padding:8px;box-shadow:var(--shadow-sm);position:relative}
+  .montage-box.ok{border-color:var(--ok);box-shadow:0 0 0 1px var(--ok),var(--shadow-sm)}
+  .montage-box img{max-width:100%;max-height:46vh;display:block;border-radius:7px}
+  .montage-box .ph{width:440px;max-width:72vw;height:280px;display:flex;align-items:center;justify-content:center;color:var(--faint)}
+  .track-meta{text-align:center;color:var(--dim);font-size:13px}
+  .track-meta .badge{display:inline-block;margin-top:5px;padding:3px 12px;border-radius:99px;font-weight:650;font-size:13px}
+  .badge.assigned{background:var(--accent-weak);color:var(--accent)}
+  .badge.skipped{background:var(--bad-weak);color:var(--bad)}
+  .badge.unseen{background:var(--card);color:var(--dim)}
+
+  .imgstrip{display:flex;flex-wrap:wrap;gap:7px;justify-content:center;max-width:820px}
+  .imgcell{position:relative;width:68px;height:90px;border-radius:7px;overflow:hidden;border:1px solid var(--border-2)}
+  .imgcell img{width:100%;height:100%;object-fit:cover;object-position:top center;display:block}
+  .imgcell .x{position:absolute;top:3px;right:3px;width:20px;height:20px;border-radius:50%;
+              background:rgba(210,59,59,.92);color:#fff;border:none;cursor:pointer;font-size:13px;line-height:1;
+              display:flex;align-items:center;justify-content:center;padding:0;box-shadow:0 1px 3px rgba(0,0,0,.25)}
+  .imgcell .x:hover{background:#e23b3b}
+  .imgstrip-label{width:100%;text-align:center;font-size:11.5px;color:var(--dim);margin-bottom:3px}
+
+  /* Right rail */
+  .rail{width:300px;border-left:1px solid var(--border);background:var(--surface);
+        display:flex;flex-direction:column;min-height:0;flex-shrink:0}
+  .rail-head{padding:12px 14px 8px}
+  .rail-head .sub{font-size:11.5px;color:var(--dim);margin-top:3px;line-height:1.5}
+  .id-strip{overflow-y:auto;padding:10px 12px 12px;display:grid;grid-template-columns:1fr 1fr;gap:9px;align-content:start;grid-auto-rows:max-content}
+  .id-strip .sub{grid-column:1/-1;font-size:12px;color:var(--dim);line-height:1.6}
+  #idStrip{flex:1}
+  .dssearch{width:100%;margin-top:7px;padding:6px 10px;font-size:12.5px}
+  .id-card{position:relative;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);
+           overflow:hidden;cursor:zoom-in;transition:transform var(--t),border-color var(--t),box-shadow var(--t)}
+  .corner-id{position:absolute;top:5px;left:5px;background:rgba(20,24,33,.8);color:#fff;
+             font-size:11px;font-weight:700;padding:2px 7px;border-radius:99px;line-height:1.35;pointer-events:none}
+  .id-card:hover{transform:translateY(-2px);border-color:var(--accent);box-shadow:var(--shadow)}
+  .id-card img{width:100%;display:block;height:132px;object-fit:cover;object-position:top center;
+               background:var(--surface-2)}
+  .id-strip .id-card img{height:172px;object-fit:contain}
+  .id-card .lbl{text-align:center;font-weight:750;color:var(--accent);font-size:15px;padding:7px 4px 9px;
+                border-top:1px solid var(--border);background:var(--accent-weak);letter-spacing:.01em}
+
+  /* Bottom action bar */
+  .commitslot:empty{display:none}
+  .commit-bar{display:flex;align-items:center;gap:14px;padding:11px 18px;background:var(--ok-weak);
+              border-top:1px solid var(--ok);color:#11663a;font-weight:560}
+  .actionbar{display:flex;align-items:center;gap:9px;padding:12px 18px;background:var(--surface);
+             border-top:1px solid var(--border);flex-wrap:wrap;flex-shrink:0}
+  .actionbar input{width:84px;font-size:19px;font-weight:700;text-align:center;color:var(--accent);padding:7px}
+  .actionhint{font-size:11.5px;color:var(--dim);margin-left:auto;max-width:280px;line-height:1.5}
+  kbd{background:var(--card);border:1px solid var(--border-2);border-bottom-width:2px;border-radius:5px;
+      padding:0 5px;font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--dim)}
+
+  /* ── Review theo ID ── */
+  .rev-bar{display:flex;align-items:center;gap:10px;padding:11px 18px;background:var(--surface);
+           border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap}
+  .rev-scroll{flex:1;overflow:auto;padding:18px}
+  .rev-body{display:flex;flex-direction:column;gap:14px;max-width:1100px;margin:0 auto}
+  .rev-group{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+             padding:14px;box-shadow:var(--shadow-sm)}
+  .rev-group.neg{background:var(--surface-2)}
+  .rev-id{font-weight:650;color:var(--accent);margin-bottom:10px;font-size:14px}
+  .rev-group.neg .rev-id{color:var(--dim)}
+  .rev-tracks{display:flex;flex-wrap:wrap;gap:11px}
+  .rev-track{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:7px;flex:0 0 150px;width:150px}
+  .rev-track img{width:100%;height:120px;object-fit:cover;object-position:top center;border-radius:6px;cursor:zoom-in;display:block}
+  .rev-meta{font-size:11.5px;color:var(--dim);margin:5px 0}
+  .rev-edit{display:flex;gap:5px}
+  .rev-input{width:46px;text-align:center;color:var(--accent);font-weight:650;padding:4px}
+  .rev-set,.rev-del{padding:5px 8px;font-size:12px;border:none;border-radius:6px;cursor:pointer;color:#fff;box-shadow:none}
+  .rev-set{background:var(--accent)} .rev-del{background:var(--bad)}
+
+  /* ── Preview modal ── */
+  .preview{position:fixed;inset:0;background:rgba(20,24,33,.62);display:flex;align-items:center;
+           justify-content:center;z-index:50;backdrop-filter:blur(2px)}
+  .preview-card{background:var(--surface);border-radius:var(--radius);padding:18px;max-width:92vw;max-height:92vh;
+                display:flex;flex-direction:column;align-items:center;gap:14px;box-shadow:var(--shadow)}
+  .preview-card img{max-width:84vw;max-height:70vh;border-radius:8px}
+  .preview-card #previewLbl{font-size:17px;font-weight:650;color:var(--accent)}
+  .preview-btns{display:flex;gap:10px}
+
+  /* ── Gallery (xem toàn bộ người đã có) ── */
+  .gallery{position:fixed;inset:0;background:rgba(20,24,33,.55);backdrop-filter:blur(2px);z-index:45;
+           display:flex;align-items:center;justify-content:center;padding:24px}
+  .gallery-panel{background:var(--surface);border-radius:var(--radius);width:min(1120px,95vw);max-height:90vh;
+                 display:flex;flex-direction:column;box-shadow:var(--shadow);overflow:hidden}
+  .gallery-head{display:flex;align-items:center;gap:12px;padding:13px 18px;border-bottom:1px solid var(--border)}
+  .gallery-grid{overflow:auto;padding:16px;display:grid;gap:12px;
+                grid-template-columns:repeat(auto-fill,148px);justify-content:start;align-content:start;grid-auto-rows:max-content}
+  .gallery-grid .id-card img{height:200px;object-fit:contain}
+  .gallery-grid .id-card .lbl{font-size:16px;padding:9px 4px 11px;color:var(--accent)}
+  .gallery-grid .sub{grid-column:1/-1;color:var(--dim)}
+
+  /* ── Trình duyệt dataset myreid ── */
+  .dsmodal{position:fixed;inset:0;background:rgba(20,24,33,.55);backdrop-filter:blur(2px);z-index:46;
+           display:flex;align-items:center;justify-content:center;padding:22px}
+  .dsmodal-panel{background:var(--surface);border-radius:var(--radius);width:min(1240px,96vw);height:90vh;
+                 display:flex;flex-direction:column;box-shadow:var(--shadow);overflow:hidden}
+  .dsmodal-head{display:flex;align-items:center;gap:10px;padding:12px 18px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+  .dsmodal-head b{font-size:15px}
+  .dsmodal-body{flex:1;overflow:auto;padding:16px 18px}
+  .ds-grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,148px);justify-content:start;align-content:start;grid-auto-rows:max-content}
+  .ds-grid .id-card{cursor:pointer}
+  .ds-grid .id-card img{height:200px;object-fit:contain}
+  .ds-card-meta{font-size:11px;color:var(--dim);text-align:center;padding:5px 4px 8px;border-top:1px solid var(--border);
+                background:var(--surface-2);line-height:1.45}
+  .ds-card-meta b{color:var(--accent);font-size:13px}
+  .id-card.onecam{border-color:var(--warn)}
+  .id-card.onecam .ds-card-meta b{color:var(--warn)}
+  .id-card.distractor{opacity:.92}
+  .ds-empty{grid-column:1/-1;color:var(--dim);padding:24px;text-align:center}
+  .dschip{padding:2px 8px;border-radius:99px;font-size:10.5px;font-weight:650;display:inline-block}
+  .dschip.d{background:var(--card);color:var(--dim)}
+
+  /* Detail: thanh công cụ + lưới ảnh chọn nhiều */
+  .ds-toolbar{position:sticky;top:-16px;z-index:2;display:flex;align-items:center;gap:9px;flex-wrap:wrap;
+              background:var(--surface);padding:10px 0 12px;margin:-4px 0 6px;border-bottom:1px solid var(--border)}
+  .ds-toolbar .selinfo{font-weight:650;font-size:13px}
+  .ds-split{margin:14px 0 6px;font-weight:650;font-size:13px;color:var(--dim)}
+  .ds-split:first-of-type{margin-top:2px}
+  .ds-imgs{display:flex;flex-wrap:wrap;gap:8px}
+  .dscell{position:relative;flex:0 0 auto;width:84px;height:112px;border-radius:8px;overflow:hidden;border:2px solid var(--border-2);
+          cursor:pointer;transition:border-color var(--t),transform var(--t)}
+  .dscell:hover{transform:translateY(-2px)}
+  .dscell img{width:100%;height:100%;object-fit:cover;object-position:top center;display:block;background:var(--surface-2);
+              -webkit-user-drag:none;user-select:none;pointer-events:none}
+  .ds-imgs{user-select:none}
+  .ds-band{position:fixed;z-index:60;border:1.5px solid var(--accent);background:rgba(47,111,237,.14);
+           border-radius:3px;pointer-events:none}
+  .dscell .cam{position:absolute;bottom:0;left:0;right:0;background:rgba(20,24,33,.66);color:#fff;
+               font-size:10px;text-align:center;padding:1px 0;letter-spacing:.02em}
+  .dscell .chk{position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;background:rgba(255,255,255,.85);
+               border:1.5px solid var(--border-2);display:flex;align-items:center;justify-content:center;
+               font-size:13px;color:transparent;line-height:1}
+  .dscell.sel{border-color:var(--accent)}
+  .dscell.sel .chk{background:var(--accent);border-color:var(--accent);color:#fff}
+
+  /* ── Toast ── */
+  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(8px);background:var(--text);
+         color:#fff;padding:11px 20px;border-radius:99px;opacity:0;transition:opacity var(--t),transform var(--t);
+         pointer-events:none;box-shadow:var(--shadow);font-weight:560;font-size:13.5px}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .toast.err{background:var(--bad)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><span class="dot"></span> Re-ID Pipeline <span style="font-size:10px;color:var(--faint);font-weight:500">v5</span></div>
+  <div class="steps" id="steps">
+    <span class="step" data-s="idle"><span class="n">1</span> Video</span>
+    <span class="step" data-s="processing"><span class="n">2</span> Crop + montage</span>
+    <span class="step" data-s="label"><span class="n">3</span> Gán ID</span>
+    <span class="step" data-s="commit"><span class="n">4</span> Gộp dataset</span>
+  </div>
+  <div class="ds-info" id="dsInfo"></div>
+  <button class="ghost" onclick="openDataset()" title="Xem & quản lý dataset myreid: từng ID, ảnh, xóa, đặt ảnh đại diện">🗂 Dataset</button>
+  <button class="hreset" onclick="resetBatch()" title="Xóa toàn bộ dữ liệu đợt đang làm (crops, montages, nhãn, video). Dataset myreid KHÔNG bị ảnh hưởng.">🗑 Xóa đợt</button>
+</header>
+
+<main><div id="view"></div></main>
+
+<!-- Khung xem ảnh ID (bấm thẻ để mở, KHÔNG tự gán) -->
+<div class="preview" id="preview" style="display:none">
+  <div class="preview-card">
+    <img id="previewImg">
+    <div id="previewLbl"></div>
+    <div class="preview-btns">
+      <button class="primary" id="previewAssign">Gán ID này cho track hiện tại</button>
+      <button id="previewClose">Đóng · Esc</button>
+    </div>
+  </div>
+</div>
+
+<!-- Gallery toàn bộ người đã có trong dataset (mở rộng để quét/so sánh) -->
+<div class="gallery" id="gallery" style="display:none">
+  <div class="gallery-panel">
+    <div class="gallery-head">
+      <b>Người đã có trong dataset</b>
+      <input id="gallerySearch" class="dssearch" placeholder="Tìm theo ID…" style="width:200px;margin:0">
+      <span class="muted" id="galleryCount" style="font-size:12px"></span>
+      <button id="galleryClose" style="margin-left:auto">Đóng · Esc</button>
+    </div>
+    <div class="gallery-grid" id="galleryGrid"></div>
+  </div>
+</div>
+
+<!-- Trình duyệt dataset myreid: lưới ID → bấm vào xem mọi ảnh, chọn nhiều để xóa -->
+<div class="dsmodal" id="dsBrowser" style="display:none">
+  <div class="dsmodal-panel">
+    <div class="dsmodal-head">
+      <b id="dsTitle">Dataset myreid</b>
+      <input id="dsSearch" class="dssearch" placeholder="Tìm ID…" style="width:160px;margin:0">
+      <div class="camfilter" id="dsFilters"></div>
+      <span class="muted" id="dsCount" style="font-size:12px"></span>
+      <button id="dsClose" style="margin-left:auto">Đóng · Esc</button>
+    </div>
+    <div class="dsmodal-body" id="dsBody"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+console.log("Re-ID UI build: grid-rows-fix-v5 (sửa thẻ bị nén dẹt trong rail/gallery)");
+const $ = id => document.getElementById(id);
+let STATE = null, DATA = null;
+let TRACKS = [], camFilter = "all", view = [], cur = 0, lastPid = null, NEXT_PID = 0, DS_PIDS = [];
+let reviewMode = false;
+let pollTimer = null;
+let lastCommit = null;   // kết quả + thống kê đợt vừa gộp (hiện ở màn idle)
+
+// ── Tải trạng thái ───────────────────────────────────────────────────────────
+async function loadState(){
+  const d = await (await fetch("/api/state")).json();
+  STATE = d.state; DATA = d;
+  updateHeader(d);
+  if(pollTimer){clearInterval(pollTimer);pollTimer=null;}
+  if(STATE==="idle") renderIdle(d);
+  else if(STATE==="processing") renderProcessing();
+  else if(STATE==="montage_pending") renderMontagePending();
+  else if(STATE==="label"||STATE==="commit") renderLabel(d);
+}
+
+function updateHeader(d){
+  const order = {idle:0, processing:1, montage_pending:1, label:2, commit:3};
+  const curStep = order[STATE] ?? 0;
+  document.querySelectorAll(".step").forEach(el=>{
+    const s = order[el.dataset.s];
+    el.classList.toggle("active", el.dataset.s===STATE || (STATE==="montage_pending"&&el.dataset.s==="processing")
+                                  || (STATE==="commit"&&el.dataset.s==="commit"));
+    el.classList.toggle("done", s < curStep);
+  });
+  const ds = d.dataset||{};
+  $("dsInfo").textContent = `Dataset · ${ds.identities||0} người · ${ds.train||0} train · ${ds.query||0} query · ${ds.gallery||0} gallery`;
+}
+
+// ── 1. IDLE ──────────────────────────────────────────────────────────────────
+function renderIdle(d){
+  const vids = d.videos||[];
+  let rows = vids.map(v=>`
+    <div class="vid-row">
+      <span style="flex:1">${v.name}</span>
+      <label class="muted">Cam</label>
+      <input type="number" min="1" value="${v.cam_id}" data-vid="${encodeURIComponent(v.video)}">
+    </div>`).join("");
+  $("view").innerHTML = `
+    <div class="page"><div class="page-wrap">
+      ${commitStatsHTML()}
+      <h2>Đưa video vào</h2>
+      <div class="box">
+        <p class="muted">Bỏ các file <b>.mp4</b> vào thư mục <code>video/</code> (mỗi file là một camera), rồi bấm quét.</p>
+        <div style="margin-top:12px">${rows || '<p class="muted">Chưa thấy video nào trong video/</p>'}</div>
+        <div style="margin-top:16px;display:flex;gap:10px">
+          <button onclick="loadState()">Quét lại</button>
+          <button class="primary" id="btnStart" ${vids.length?"":"disabled"}>Bắt đầu crop + montage</button>
+        </div>
+      </div>
+      ${(d.dataset&&d.dataset.identities)?`<p class="muted">Dataset hiện có ${d.dataset.identities} người. Đợt mới sẽ được gộp thêm vào.</p>`:""}
+    </div></div>`;
+  if(vids.length){
+    $("btnStart").onclick = async ()=>{
+      const cameras = [...document.querySelectorAll("input[data-vid]")].map(inp=>({
+        video: decodeURIComponent(inp.dataset.vid), cam_id: parseInt(inp.value)||1
+      }));
+      await fetch("/api/start",{method:"POST",headers:{"Content-Type":"application/json"},
+                                body:JSON.stringify({cameras})});
+      loadState();
+    };
+  }
+}
+
+// ── 2. PROCESSING ────────────────────────────────────────────────────────────
+function renderProcessing(){
+  $("view").innerHTML = `
+    <div class="page"><div class="page-wrap">
+      <h2>Đang xử lý</h2>
+      <div class="box">
+        <div id="phase" class="muted">Đang khởi động…</div>
+        <pre class="log" id="log" style="margin-top:10px"></pre>
+      </div>
+    </div></div>`;
+  const poll = async ()=>{
+    const p = await (await fetch("/api/progress")).json();
+    $("phase").textContent = "Giai đoạn: " + (p.phase||"") + (p.error?("  — lỗi: "+p.error):"");
+    $("log").textContent = (p.log||[]).join("\n");
+    $("log").scrollTop = $("log").scrollHeight;
+    if(!p.running){
+      clearInterval(pollTimer); pollTimer=null;
+      if(p.error){
+        $("phase").innerHTML = `<b style="color:var(--bad)">Xử lý lỗi: ${p.error}</b>
+          <button style="margin-left:12px" onclick="loadState()">Quay lại</button>`;
+      } else { setTimeout(loadState, 600); }
+    }
+  };
+  poll();
+  pollTimer = setInterval(poll, 1000);
+}
+
+function renderMontagePending(){
+  $("view").innerHTML = `
+    <div class="page"><div class="page-wrap">
+      <h2>Còn dở — chưa tạo montage</h2>
+      <div class="box">
+        <p class="muted">Có dữ liệu crop nhưng chưa làm montage (server có thể đã tắt giữa chừng).
+        Xử lý nốt rồi mới gán nhãn.</p>
+        <button class="primary" style="margin-top:14px" id="btnResume">Tiếp tục xử lý</button>
+      </div>
+    </div></div>`;
+  $("btnResume").onclick = async ()=>{
+    await fetch("/api/resume_montage",{method:"POST"});
+    loadState();
+  };
+}
+
+// ── 3. LABEL ─────────────────────────────────────────────────────────────────
+function renderLabel(d){
+  TRACKS = d.tracks||[]; NEXT_PID = d.next_pid||0; DS_PIDS = d.ds_pids||[];
+  if(reviewMode){ renderReview(); return; }
+  const cams = d.cameras||[];
+  if(camFilter!=="all" && !cams.includes(camFilter)) camFilter = "all";
+  const camBtns = ['<button class="'+(camFilter==="all"?"primary":"")+'" onclick="setCam(\'all\')">Tất cả</button>']
+    .concat(cams.map(c=>`<button class="${camFilter===c?"primary":""}" onclick="setCam(${c})">Cam ${c}</button>`)).join(" ");
+
+  $("view").innerHTML = `
+    <div class="labelbar">
+      <button class="ghost" onclick="openGallery()">👥 Người đã có (${DS_PIDS.length})</button>
+      <div class="camfilter">${camBtns}</div>
+      <div class="navcluster">
+        <button id="bPrev" class="iconbtn">◀</button>
+        <div id="pos" class="pos"></div>
+        <button id="bNext" class="iconbtn">▶</button>
+      </div>
+      <button class="ghost" onclick="toggleReview()">Xem lại theo ID</button>
+    </div>
+    <div class="workspace">
+      <div class="canvas">
+        <div class="montage-box" id="mbox"><div class="ph" id="ph">…</div><img id="mimg" style="display:none"></div>
+        <div id="info" class="track-meta"></div>
+        <div class="imgstrip" id="trackImgs"></div>
+      </div>
+      <aside class="rail rail-right">
+        <div class="rail-head">
+          <h3>ID đã gán (đợt này)</h3>
+          <div class="sub">Số ID hiện ngay dưới mỗi ảnh. Cùng người nhiều camera → bấm lại thẻ ID đó.</div>
+        </div>
+        <div class="id-strip" id="idStrip"></div>
+      </aside>
+    </div>
+    <div id="commitBar" class="commitslot"></div>
+    <div class="actionbar">
+      <input id="pidIn" inputmode="numeric" placeholder="ID" autocomplete="off">
+      <button class="primary" id="bAssign">Gán <kbd>Enter</kbd></button>
+      <button id="bSame">Như track trước <kbd>Space</kbd></button>
+      <button class="warn" id="bSkip">Bỏ qua <kbd>S</kbd></button>
+      <button class="red" id="bDel">Xóa track <kbd>Del</kbd></button>
+      <div class="actionhint">Mỗi người một ID mới (web gợi ý số kế tiếp). <kbd>←</kbd><kbd>→</kbd> di chuyển track.</div>
+    </div>`;
+
+  $("bPrev").onclick=prev; $("bNext").onclick=next;
+  $("bAssign").onclick=assignFromInput; $("bSame").onclick=assignSame;
+  $("bSkip").onclick=skip; $("bDel").onclick=delTrack;
+  rebuildView(); renderTrack(); renderStrip(d);
+  updateCommitBar(d.stats);
+}
+
+function setCam(c){ camFilter=c; cur=0; renderLabel(DATA); }
+
+// ── Xem lại theo ID ──────────────────────────────────────────────────────────
+function toggleReview(){ reviewMode=!reviewMode; renderLabel(DATA); }
+
+function renderReview(){
+  const groups={};
+  TRACKS.forEach(t=>{ (groups[t.global_pid]=groups[t.global_pid]||[]).push(t); });
+  const rank=v=> v>=0?0:(v===-1?1:2);
+  const keys=Object.keys(groups).map(Number).sort((a,b)=>rank(a)-rank(b)||a-b);
+
+  let body="";
+  keys.forEach(pid=>{
+    const ts=groups[pid];
+    const title = pid>=0?("ID "+pid):(pid===-1?"Đã bỏ qua":"Chưa xem");
+    const tot = ts.reduce((s,t)=>s+t.num_images,0);
+    let cards="";
+    ts.forEach(t=>{
+      const url=(t.montage?"/montage":"/crop")+"?track_dir="+encodeURIComponent(t.track_dir);
+      cards+=`<div class="rev-track">
+        <img loading="lazy" class="rev-img" src="${url}" data-pid="${pid}" data-src="${url}">
+        <div class="rev-meta">cam ${t.cam} · ${t.num_images} ảnh</div>
+        <div class="rev-edit">
+          <input class="rev-input" value="${t.global_pid>=0?t.global_pid:''}" placeholder="ID">
+          <button class="rev-set" data-td="${t.track_dir}">Đổi</button>
+          <button class="rev-del" data-td="${t.track_dir}" data-n="${t.num_images}">🗑</button>
+        </div></div>`;
+    });
+    body+=`<div class="rev-group ${pid<0?'neg':''}">
+      <div class="rev-id">${title} · ${ts.length} track · ${tot} ảnh</div>
+      <div class="rev-tracks">${cards}</div></div>`;
+  });
+
+  const unseen=TRACKS.filter(t=>t.global_pid===-2).length;
+  const completeBtn = unseen>0
+    ? `<button disabled>Còn ${unseen} track chưa xem</button>`
+    : `<button class="green" id="revComplete">Hoàn tất &amp; gộp vào dataset</button>`;
+
+  $("view").innerHTML=`
+    <div class="rev-bar">
+      <button id="revBack">← Quay lại gán</button>
+      <b>Xem lại theo ID</b>
+      <span class="muted" style="font-size:12.5px">Soát từng người — sai thì đổi ID hoặc xóa track, xong bấm hoàn tất</span>
+      <span style="margin-left:auto">${completeBtn}</span>
+    </div>
+    <div class="rev-scroll"><div class="rev-body">${body||'<p class="muted">Chưa có track nào</p>'}</div></div>`;
+
+  $("revBack").onclick=toggleReview;
+  const rc=$("revComplete"); if(rc) rc.onclick=commit;
+  document.querySelectorAll(".rev-img").forEach(im=>{
+    im.onclick=()=>openPreview(parseInt(im.dataset.pid,10), im.dataset.src);
+  });
+  document.querySelectorAll(".rev-set").forEach(b=>{
+    b.onclick=()=>{ const inp=b.parentElement.querySelector(".rev-input"); changeTrackId(b.dataset.td, inp.value); };
+  });
+  document.querySelectorAll(".rev-del").forEach(b=>{
+    b.onclick=()=>reviewDelete(b.dataset.td, parseInt(b.dataset.n,10));
+  });
+}
+
+function changeTrackId(td, val){
+  val=(""+val).trim();
+  if(val===""){ toast("Nhập ID",true); return; }
+  const p=parseInt(val,10);
+  if(isNaN(p)||p<0){ toast("ID phải ≥ 0",true); return; }
+  const batchPids=new Set(TRACKS.filter(t=>t.global_pid>=0).map(t=>t.global_pid));
+  if(DS_PIDS.includes(p)&&!batchPids.has(p)){
+    if(!confirm(`⚠️ ID ${p} đã là người cũ trong dataset. Gán sẽ gộp chung. Vẫn đổi?`)) return;
+  }
+  const t=TRACKS.find(x=>x.track_dir===td); if(!t) return;
+  t.global_pid=p;
+  post("/api/label",{track_dir:td,global_pid:p}).then(r=>{ if(r) NEXT_PID=r.next_pid; renderReview(); });
+}
+
+async function reviewDelete(td, n){
+  if(!confirm(`Xóa hẳn ${td} và ${n} ảnh?`)) return;
+  await post("/api/delete",{track_dir:td});
+  const i=TRACKS.findIndex(x=>x.track_dir===td);
+  if(i>=0) TRACKS.splice(i,1);
+  renderReview();
+}
+
+function rebuildView(){
+  view=[]; TRACKS.forEach((t,i)=>{ if(camFilter==="all"||t.cam===camFilter) view.push(i); });
+  if(cur>=view.length) cur=Math.max(0,view.length-1);
+}
+function curTrack(){ return view.length?TRACKS[view[cur]]:null; }
+
+function renderTrack(){
+  const t = curTrack();
+  if(!t){ $("pos").textContent="Không có track"; $("mimg").style.display="none";
+          $("ph").style.display="flex"; $("ph").textContent="Trống"; $("info").textContent=""; return; }
+  $("pos").textContent = `Track ${cur+1} / ${view.length}`;
+  const img=$("mimg"), ph=$("ph");
+  const src = t.montage ? "/montage?track_dir="+encodeURIComponent(t.track_dir)
+                        : "/crop?track_dir="+encodeURIComponent(t.track_dir);
+  img.src = src; img.style.display="block"; ph.style.display="none";
+  img.onerror=()=>{ img.style.display="none"; ph.style.display="flex"; ph.textContent="Không có ảnh"; };
+  $("mbox").className = "montage-box" + (t.global_pid>=0?" ok":"");
+  let badge = t.global_pid>=0 ? `<span class="badge assigned">ID = ${t.global_pid}</span>`
+            : (t.global_pid===-1 ? `<span class="badge skipped">đã bỏ qua</span>`
+            : `<span class="badge unseen">chưa xem</span>`);
+  $("info").innerHTML = `cam ${t.cam} · <code>${t.track_dir}</code> · <span id="nImg">${t.num_images}</span> ảnh<br>${badge}`;
+  $("pidIn").value = t.global_pid>=0 ? t.global_pid : "";
+  renderTrackImages(t);
+}
+
+async function renderTrackImages(t){
+  const box = $("trackImgs"); box.innerHTML = '<div class="imgstrip-label">…</div>';
+  let names = [];
+  try{ names = (await (await fetch("/track_images?track_dir="+encodeURIComponent(t.track_dir))).json()).images||[]; }
+  catch(e){ box.innerHTML=""; return; }
+  box.innerHTML = `<div class="imgstrip-label">${names.length} ảnh trong track — bấm × để xóa ảnh lẫn người khác</div>`;
+  names.forEach(name=>{
+    const cell=document.createElement("div"); cell.className="imgcell";
+    cell.innerHTML=`<img loading="lazy" src="/img?track_dir=${encodeURIComponent(t.track_dir)}&name=${encodeURIComponent(name)}">
+                    <button class="x" title="Xóa ảnh này">×</button>`;
+    cell.querySelector(".x").onclick = async ()=>{
+      const r = await post("/api/delete_image",{track_dir:t.track_dir, name});
+      if(r&&r.ok){
+        t.num_images = r.num_images;
+        const n=$("nImg"); if(n) n.textContent=r.num_images;
+        cell.remove();
+        const lbl=box.querySelector(".imgstrip-label");
+        if(lbl) lbl.textContent = `${r.num_images} ảnh trong track — bấm × để xóa ảnh lẫn người khác`;
+      }
+    };
+    box.appendChild(cell);
+  });
+}
+
+function renderStrip(d){
+  const strip = $("idStrip"); strip.innerHTML="";
+  const reps={};
+  TRACKS.forEach(t=>{ if(t.global_pid>=0 && !(t.global_pid in reps)) reps[t.global_pid]=t; });
+  Object.keys(reps).map(Number).sort((a,b)=>a-b).forEach(pid=>{
+    const t=reps[pid];
+    const enc=encodeURIComponent(t.track_dir);
+    const face = "/crop?track_dir="+enc;                                   // 1 ảnh mặt rõ cho thumbnail
+    const full = t.montage ? "/montage?track_dir="+enc : face;            // bấm vào xem montage đầy đủ
+    const c=document.createElement("div"); c.className="id-card";
+    c.title="Bấm để xem ảnh ID "+pid+" (không tự gán)";
+    c.onclick=()=>openPreview(pid, full);
+    c.innerHTML=`<img loading="lazy" src="${face}"><span class="corner-id">${pid}</span><div class="lbl">ID ${pid}</div>`;
+    strip.appendChild(c);
+  });
+  if(!strip.children.length)
+    strip.innerHTML='<div class="sub">Chưa gán ai. Người đầu tiên → gõ <b>'+NEXT_PID+'</b> rồi Enter.</div>';
+}
+
+function updateCommitBar(stats){
+  const bar=$("commitBar"); if(!bar) return;
+  if(stats && stats.unseen===0 && stats.total>0){
+    bar.className="commit-bar";
+    bar.innerHTML=`<span>Đã xử lý hết ${stats.total} track · ${stats.pids} người · ${stats.skipped} bỏ qua.</span>
+      <button class="green" style="margin-left:auto" onclick="toggleReview()">Xem lại theo ID → hoàn tất</button>`;
+  } else if(stats){
+    bar.className="commitslot";
+    bar.innerHTML="";
+  }
+}
+
+async function post(url, body){
+  try{ const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+       if(!r.ok) throw new Error(r.status); return await r.json(); }
+  catch(e){ toast("Lỗi: "+e.message,true); return null; }
+}
+function assignPid(pid){
+  const t=curTrack(); if(!t) return;
+  t.global_pid=pid; lastPid=pid;
+  post("/api/label",{track_dir:t.track_dir,global_pid:pid}).then(r=>{ if(r){updateCommitBar(r.stats);NEXT_PID=r.next_pid;} renderStrip(DATA);});
+  next();
+}
+function assignFromInput(){ const v=$("pidIn").value.trim();
+  if(v===""){toast("Chưa nhập ID",true);return;}
+  const p=parseInt(v,10); if(isNaN(p)||p<0){toast("ID phải ≥ 0",true);return;}
+  const batchPids = new Set(TRACKS.filter(t=>t.global_pid>=0).map(t=>t.global_pid));
+  if(DS_PIDS.includes(p) && !batchPids.has(p)){
+    if(!confirm(`⚠️ ID ${p} đã là người cũ trong dataset. Gán số này sẽ gộp chung với người đó.\n\nNgười mới nên dùng ID ${NEXT_PID}.\n\nVẫn gán ${p}?`)) return;
+  }
+  assignPid(p); }
+function assignSame(){ if(lastPid===null){toast("Chưa có ID trước",true);return;} assignPid(lastPid); }
+function skip(){ const t=curTrack(); if(!t)return; t.global_pid=-1;
+  post("/api/skip",{track_dir:t.track_dir}).then(r=>{if(r)updateCommitBar(r.stats);}); next(); }
+async function delTrack(){ const t=curTrack(); if(!t)return;
+  if(!confirm(`Xóa hẳn ${t.track_dir} và ${t.num_images} ảnh?`)) return;
+  await post("/api/delete",{track_dir:t.track_dir});
+  TRACKS.splice(view[cur],1); rebuildView(); renderTrack(); renderStrip(DATA); toast("Đã xóa track"); }
+function next(){ if(cur<view.length-1)cur++; renderTrack(); }
+function prev(){ if(cur>0)cur--; renderTrack(); }
+
+async function resetBatch(){
+  if(!confirm("XÓA TẤT CẢ dữ liệu đợt đang làm:\n• crops/  • montages/  • nhãn (labels.csv)  • video trong video/\n\nDataset myreid KHÔNG bị ảnh hưởng.\n\nXóa hết?")) return;
+  const r=await post("/api/reset_batch",{});
+  if(r&&r.ok){ reviewMode=false; toast("Đã xóa sạch dữ liệu đợt này"); }
+  setTimeout(loadState,300);
+}
+
+async function commit(){
+  if(!confirm("Gộp đợt này vào dataset rồi xóa dữ liệu tạm (crops, montages, labels, video)?")) return;
+  const r=await post("/api/commit",{});
+  if(r&&r.ok){ lastCommit=r.result; toast("Đã gộp vào dataset"); }
+  reviewMode=false;
+  setTimeout(loadState,400);
+}
+
+// Box thống kê đợt vừa gộp (camera coverage) — hiện ở màn idle
+function commitStatsHTML(){
+  if(!lastCommit) return "";
+  const s=lastCommit, cov=s.coverage||{}, bc=cov.by_cams||{};
+  const ratio = cov.identities ? Math.round(100*(cov.ge2||0)/cov.identities) : 0;
+  const warn = (cov.identities && (cov.ge2||0)/cov.identities < 0.4)
+    ? ' ⚠️ Tỉ lệ ≥2 camera còn thấp — nên gán cùng người qua nhiều camera nhiều hơn để tránh camera-bias.' : '';
+  return `<div class="box statbox">
+    <h3 style="margin-bottom:10px">Kết quả đợt vừa gộp</h3>
+    <div class="statgrid">
+      <div><b>+${s.new_ids||0}</b><span>người mới (≥2 cam)</span></div>
+      <div class="warn"><b>${s.new_distractor||0}</b><span>1 cam → distractor</span></div>
+      <div><b>${s.updated_ids||0}</b><span>người cũ bổ sung</span></div>
+      <div><b>${s.train||0}</b><span>ảnh train</span></div>
+      <div><b>${s.query||0}</b><span>ảnh query</span></div>
+      <div><b>${s.gallery||0}</b><span>ảnh gallery</span></div>
+    </div>
+    <div class="muted" style="margin:12px 0 6px">Sức khỏe dataset — mỗi người ở mấy camera:</div>
+    <div class="statgrid">
+      <div><b>${cov.identities||0}</b><span>tổng identity</span></div>
+      <div class="ok"><b>${cov.ge2||0}</b><span>≥2 camera (tốt)</span></div>
+      <div class="warn"><b>${bc['1']||0}</b><span>1 camera</span></div>
+      <div><b>${bc['2']||0}</b><span>2 camera</span></div>
+      <div><b>${bc['3']||0}</b><span>3 camera</span></div>
+      <div><b>${cov.distractor_people||0}</b><span>distractor</span></div>
+    </div>
+    <div class="muted" style="margin-top:10px">Tỉ lệ "khỏe": <b style="color:var(--text)">${ratio}%</b> identity có ≥2 camera.${warn}</div>
+  </div>`;
+}
+
+// ── Khung xem ảnh ID ─────────────────────────────────────────────────────────
+let previewPid = null;
+function openPreview(pid, src){
+  previewPid = pid;
+  $("previewImg").src = src;
+  $("previewLbl").textContent = pid>=0 ? ("ID " + pid) : (pid===-1 ? "Đã bỏ qua" : "Chưa xem");
+  $("previewAssign").style.display = pid>=0 ? "" : "none";
+  $("preview").style.display = "flex";
+}
+function closePreview(){ $("preview").style.display="none"; previewPid=null; }
+$("previewClose").onclick = closePreview;
+$("previewAssign").onclick = ()=>{ const p=previewPid; closePreview(); closeGallery(); if(p!=null) assignPid(p); };
+$("preview").onclick = (e)=>{ if(e.target===$("preview")) closePreview(); };
+
+// ── Gallery: xem toàn bộ người đã có để quét/so sánh ─────────────────────────
+function openGallery(){
+  renderGallery("");
+  $("gallery").style.display="flex";
+  const gs=$("gallerySearch"); gs.value=""; gs.oninput=()=>renderGallery(gs.value.trim());
+  setTimeout(()=>gs.focus(),30);
+}
+function closeGallery(){ $("gallery").style.display="none"; }
+function renderGallery(filter){
+  const grid=$("galleryGrid");
+  let pids=DS_PIDS.slice().sort((a,b)=>a-b);
+  if(filter) pids=pids.filter(p=>(""+p).includes(filter));
+  $("galleryCount").textContent=`${DS_PIDS.length} người`+(filter?` · khớp ${pids.length}`:"");
+  grid.innerHTML="";
+  if(!pids.length){ grid.innerHTML='<div class="sub">'+(DS_PIDS.length?'Không khớp ID':'Dataset chưa có ai')+'</div>'; return; }
+  pids.forEach(pid=>{
+    const src="/identity?pid="+pid;
+    const c=document.createElement("div"); c.className="id-card existing";
+    c.title="Xem to · gán lại ID "+pid+" cho track hiện tại";
+    c.onclick=()=>openPreview(pid, src);
+    c.innerHTML=`<img loading="lazy" src="${src}" onerror="this.style.display='none'"><span class="corner-id">${pid}</span><div class="lbl">ID ${pid}</div>`;
+    grid.appendChild(c);
+  });
+}
+$("galleryClose").onclick = closeGallery;
+$("gallery").onclick = (e)=>{ if(e.target===$("gallery")) closeGallery(); };
+
+// ── Trình duyệt dataset myreid ───────────────────────────────────────────────
+let DSDATA=[], dsPid=null, dsImages=[], dsSel=new Set(), dsFilter="real", dsQuery="";
+
+async function openDataset(){
+  $("dsBrowser").style.display="flex";
+  const gs=$("dsSearch"); gs.value=dsQuery;
+  gs.oninput=()=>{ dsQuery=gs.value.trim(); if(dsPid===null) renderDsList(); };
+  await loadDataset();
+}
+function closeDataset(){ $("dsBrowser").style.display="none"; dsPid=null; loadState(); }
+
+async function loadDataset(){
+  try{
+    const d=await (await fetch("/api/dataset")).json();
+    DSDATA=d.identities||[];
+    if(d.stats) setDsInfo(d.stats);
+  }catch(e){ DSDATA=[]; }
+  if(dsPid!==null && DSDATA.some(x=>x.pid===dsPid)) openIdentity(dsPid);
+  else renderDsList();
+}
+function setDsInfo(ds){
+  $("dsInfo").textContent=`Dataset · ${ds.identities||0} người · ${ds.train||0} train · ${ds.query||0} query · ${ds.gallery||0} gallery`;
+}
+
+function dsFiltered(){
+  let xs=DSDATA.slice();
+  if(dsFilter==="real")           xs=xs.filter(x=>!x.distractor);
+  else if(dsFilter==="onecam")    xs=xs.filter(x=>!x.distractor && x.ncams<=1);
+  else if(dsFilter==="distractor")xs=xs.filter(x=>x.distractor);
+  if(dsQuery) xs=xs.filter(x=>(""+x.pid).includes(dsQuery));
+  return xs;
+}
+function thumbSrc(x){
+  if(x.has_avatar) return "/identity?pid="+x.pid;
+  if(x.thumb) return "/ds_img?split="+x.thumb.split+"&name="+encodeURIComponent(x.thumb.name);
+  return "";
+}
+
+function renderDsList(){
+  dsPid=null; dsSel.clear();
+  $("dsTitle").textContent="Dataset myreid";
+  const nReal=DSDATA.filter(x=>!x.distractor).length;
+  const nOne=DSDATA.filter(x=>!x.distractor&&x.ncams<=1).length;
+  const nDis=DSDATA.filter(x=>x.distractor).length;
+  const f=[["real","Người thật ("+nReal+")"],["onecam","⚠ 1 camera ("+nOne+")"],
+           ["distractor","Distractor ("+nDis+")"],["all","Tất cả ("+DSDATA.length+")"]];
+  $("dsFilters").innerHTML=f.map(([k,lbl])=>
+    `<button class="${dsFilter===k?"primary":""}" onclick="setDsFilter('${k}')">${lbl}</button>`).join("");
+  const xs=dsFiltered();
+  $("dsCount").textContent=`${xs.length} hiển thị`;
+  if(!xs.length){ $("dsBody").innerHTML='<div class="ds-grid"><div class="ds-empty">'+
+      (DSDATA.length?'Không có ID khớp bộ lọc':'Dataset myreid chưa có ai')+'</div></div>'; return; }
+  let html='<div class="ds-grid">';
+  xs.forEach(x=>{
+    const cls=x.distractor?"distractor":(x.ncams<=1?"onecam":"");
+    const label=x.distractor?`distractor`:`ID ${x.pid}`;
+    html+=`<div class="id-card ${cls}" onclick="openIdentity(${x.pid})" title="Xem mọi ảnh của ${label}">
+      <img loading="lazy" src="${thumbSrc(x)}" onerror="this.style.visibility='hidden'">
+      <span class="corner-id">${x.pid}</span>
+      <div class="ds-card-meta"><b>${label}</b><br>${x.total} ảnh · ${x.ncams} cam</div></div>`;
+  });
+  $("dsBody").innerHTML=html+'</div>';
+}
+function setDsFilter(k){ dsFilter=k; renderDsList(); }
+
+async function openIdentity(pid){
+  dsPid=pid; dsSel.clear();
+  $("dsBody").innerHTML='<div class="ds-empty" style="padding:40px">Đang tải…</div>';
+  try{ dsImages=(await (await fetch("/api/identity_images?pid="+pid)).json()).images||[]; }
+  catch(e){ dsImages=[]; }
+  renderDsDetail();
+}
+
+function renderDsDetail(){
+  const info=DSDATA.find(x=>x.pid===dsPid)||{};
+  const isD=info.distractor;
+  $("dsTitle").innerHTML=`<button class="ghost" onclick="renderDsList()" style="padding:4px 10px;margin-right:8px">← Tất cả ID</button>`+
+    (isD?`distractor ${dsPid}`:`ID ${dsPid}`)+` <span class="muted" style="font-weight:400;font-size:12px">· ${dsImages.length} ảnh · ${(info.ncams||0)} camera</span>`;
+  $("dsCount").textContent="";
+  if(!dsImages.length){ $("dsBody").innerHTML='<div class="ds-empty">Không còn ảnh nào</div>'; return; }
+
+  // Gom theo split
+  const order=["train","query","gallery"], groups={};
+  dsImages.forEach(im=>{ (groups[im.split]=groups[im.split]||[]).push(im); });
+  let body="";
+  order.forEach(sp=>{
+    const xs=groups[sp]; if(!xs||!xs.length) return;
+    const cams=[...new Set(xs.map(i=>i.cam))].sort((a,b)=>a-b);
+    body+=`<div class="ds-split">${sp} · ${xs.length} ảnh · cam ${cams.join(", ")}</div><div class="ds-imgs">`;
+    xs.forEach(im=>{
+      const key=im.split+"/"+im.name;
+      body+=`<div class="dscell" data-key="${key}">
+        <img loading="lazy" src="/ds_img?split=${im.split}&name=${encodeURIComponent(im.name)}">
+        <span class="cam">c${im.cam}</span><span class="chk">✓</span></div>`;
+    });
+    body+=`</div>`;
+  });
+
+  const warn = (!isD && (info.ncams||0)<=1)
+    ? '<span class="muted" style="color:var(--warn)">⚠ Chỉ 1 camera — dễ gây camera-bias cho ReID.</span>' : '';
+  $("dsBody").innerHTML=`
+    <div class="ds-toolbar">
+      <button onclick="dsSelectAll(true)">Chọn tất cả</button>
+      <button onclick="dsSelectAll(false)">Bỏ chọn</button>
+      <span class="selinfo" id="dsSelInfo">0 ảnh đã chọn</span>
+      <span class="muted" style="font-size:11.5px">· kéo chuột để quét chọn theo vùng</span>
+      <button class="primary" id="dsBtnAvatar" disabled onclick="dsSetAvatar()">⭐ Đặt làm đại diện</button>
+      <button class="red" id="dsBtnDel" disabled onclick="dsDeleteSelected()">🗑 Xóa ảnh đã chọn</button>
+      <button class="red ghost" style="margin-left:auto;color:var(--bad);border-color:var(--bad)" onclick="dsDeleteIdentity()">Xóa hẳn người này</button>
+    </div>
+    ${warn}
+    ${body}`;
+  dsUpdateSelUI();
+}
+
+function toggleDsSel(key){
+  if(dsSel.has(key)) dsSel.delete(key); else dsSel.add(key);
+  const cell=$("dsBody").querySelector('.dscell[data-key="'+CSS.escape(key)+'"]');
+  if(cell) cell.classList.toggle("sel", dsSel.has(key));
+  dsUpdateSelUI();
+}
+
+// Kéo-thả chọn ảnh theo vùng (rubber-band) — cộng dồn vào lựa chọn hiện có
+let dsDrag={on:false,moved:false,sx:0,sy:0,base:null,hit:null,band:null,cell:null};
+function dsBandInit(){
+  $("dsBody").addEventListener("pointerdown",dsDragStart);
+  window.addEventListener("pointermove",dsDragMove);
+  window.addEventListener("pointerup",dsDragEnd);
+  window.addEventListener("pointercancel",dsDragEnd);
+}
+function dsDragStart(e){
+  if(dsPid===null || e.button!==0) return;            // chỉ ở khung chi tiết, chuột trái
+  if(e.target.closest(".ds-toolbar")) return;          // không kéo trên thanh công cụ
+  dsDrag.on=true; dsDrag.moved=false; dsDrag.sx=e.clientX; dsDrag.sy=e.clientY;
+  dsDrag.base=new Set(dsSel); dsDrag.hit=new Set();
+  dsDrag.cell=e.target.closest(".dscell");
+  e.preventDefault();                                  // chặn kéo-ảnh / bôi đen mặc định
+}
+function dsDragMove(e){
+  if(!dsDrag.on) return;
+  const dx=e.clientX-dsDrag.sx, dy=e.clientY-dsDrag.sy;
+  if(!dsDrag.moved && Math.hypot(dx,dy)<5) return;     // ngưỡng để phân biệt click
+  dsDrag.moved=true;
+  if(!dsDrag.band){ dsDrag.band=document.createElement("div"); dsDrag.band.className="ds-band";
+                    document.body.appendChild(dsDrag.band); }
+  const x=Math.min(e.clientX,dsDrag.sx), y=Math.min(e.clientY,dsDrag.sy),
+        w=Math.abs(dx), h=Math.abs(dy);
+  Object.assign(dsDrag.band.style,{left:x+"px",top:y+"px",width:w+"px",height:h+"px"});
+  const R={l:x,t:y,r:x+w,b:y+h};
+  dsDrag.hit=new Set();
+  $("dsBody").querySelectorAll(".dscell").forEach(c=>{
+    const q=c.getBoundingClientRect();
+    const inside=!(q.right<R.l||q.left>R.r||q.bottom<R.t||q.top>R.b);
+    if(inside) dsDrag.hit.add(c.dataset.key);
+    c.classList.toggle("sel", dsDrag.base.has(c.dataset.key)||inside);
+  });
+  // tự cuộn khi kéo sát mép trên/dưới
+  const bb=$("dsBody").getBoundingClientRect();
+  if(e.clientY>bb.bottom-28) $("dsBody").scrollTop+=18;
+  else if(e.clientY<bb.top+28) $("dsBody").scrollTop-=18;
+  const n=new Set([...dsDrag.base,...dsDrag.hit]).size;
+  const si=$("dsSelInfo"); if(si) si.textContent=n+" ảnh đã chọn";
+  const del=$("dsBtnDel"); if(del) del.disabled=!n;
+  const av=$("dsBtnAvatar"); if(av) av.disabled=(n!==1);
+}
+function dsDragEnd(){
+  if(!dsDrag.on) return;
+  dsDrag.on=false;
+  if(dsDrag.band){ dsDrag.band.remove(); dsDrag.band=null; }
+  if(dsDrag.moved){                                    // kéo → gộp vùng vào lựa chọn
+    dsSel=dsDrag.base; dsDrag.hit.forEach(k=>dsSel.add(k));
+    $("dsBody").querySelectorAll(".dscell").forEach(c=>c.classList.toggle("sel", dsSel.has(c.dataset.key)));
+    dsUpdateSelUI();
+  } else if(dsDrag.cell){                               // click đơn → bật/tắt 1 ảnh
+    toggleDsSel(dsDrag.cell.dataset.key);
+  }
+  dsDrag.cell=null;
+}
+function dsSelectAll(on){
+  dsSel.clear();
+  if(on) dsImages.forEach(im=>dsSel.add(im.split+"/"+im.name));
+  $("dsBody").querySelectorAll(".dscell").forEach(c=>c.classList.toggle("sel", dsSel.has(c.dataset.key)));
+  dsUpdateSelUI();
+}
+function dsUpdateSelUI(){
+  const n=dsSel.size;
+  const si=$("dsSelInfo"); if(si) si.textContent=n+" ảnh đã chọn";
+  const del=$("dsBtnDel"); if(del) del.disabled=!n;
+  const av=$("dsBtnAvatar"); if(av){ av.disabled=(n!==1); av.title=n!==1?"Chọn đúng 1 ảnh":""; }
+}
+
+function dsSelList(){
+  return [...dsSel].map(k=>{ const i=k.indexOf("/"); return {split:k.slice(0,i), name:k.slice(i+1)}; });
+}
+async function dsDeleteSelected(){
+  if(!dsSel.size) return;
+  if(!confirm(`Xóa ${dsSel.size} ảnh đã chọn khỏi dataset myreid?\nKhông thể hoàn tác.`)) return;
+  const r=await post("/api/ds_delete_images",{pid:dsPid, images:dsSelList()});
+  if(r&&r.ok){ toast(`Đã xóa ${r.deleted} ảnh`); if(r.dataset) setDsInfo(r.dataset); dsSel.clear(); await loadDataset(); }
+}
+async function dsSetAvatar(){
+  if(dsSel.size!==1) return;
+  const it=dsSelList()[0];
+  const r=await post("/api/ds_set_avatar",{pid:dsPid, split:it.split, name:it.name});
+  if(r&&r.ok){ toast("Đã đặt ảnh đại diện"); }
+  else toast("Không đặt được ảnh đại diện",true);
+}
+async function dsDeleteIdentity(){
+  if(!confirm(`Xóa HẲN ${dsPid} cùng toàn bộ ảnh (train/query/gallery) và ảnh đại diện?\nKhông thể hoàn tác.`)) return;
+  const r=await post("/api/ds_delete_identity",{pid:dsPid});
+  if(r&&r.ok){ toast(`Đã xóa người ID ${dsPid} (${r.deleted} ảnh)`); if(r.dataset) setDsInfo(r.dataset); dsPid=null; await loadDataset(); }
+}
+$("dsClose").onclick=closeDataset;
+$("dsBrowser").onclick=(e)=>{ if(e.target===$("dsBrowser")) closeDataset(); };
+
+// ── Toast ────────────────────────────────────────────────────────────────────
+let tt; function toast(m,err){ const e=$("toast"); e.textContent=m; e.className="toast show"+(err?" err":"");
+  clearTimeout(tt); tt=setTimeout(()=>e.className="toast",1800); }
+
+// ── Phím tắt ─────────────────────────────────────────────────────────────────
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape"){
+    if($("preview").style.display!=="none"){ e.preventDefault(); closePreview(); return; }
+    if($("dsBrowser").style.display!=="none"){ e.preventDefault();
+      if(dsPid!==null) renderDsList(); else closeDataset(); return; }
+    if($("gallery").style.display!=="none"){ e.preventDefault(); closeGallery(); return; }
+    return;
+  }
+  if($("preview").style.display!=="none") return;
+  if($("dsBrowser").style.display!=="none") return;  // dataset mở: không dùng phím tắt gán
+  if($("gallery").style.display!=="none") return;   // gallery mở: không dùng phím tắt gán
+  if(reviewMode) return;
+  if(STATE!=="label"&&STATE!=="commit") return;
+  const inInput = document.activeElement===$("pidIn");
+  if(e.key==="Enter"){e.preventDefault();assignFromInput();return;}
+  if(e.key===" "&&!inInput){e.preventDefault();assignSame();return;}
+  if(e.key==="ArrowRight"){e.preventDefault();next();return;}
+  if(e.key==="ArrowLeft"){e.preventDefault();prev();return;}
+  if((e.key==="s"||e.key==="S")&&!inInput){e.preventDefault();skip();return;}
+  if(e.key==="Delete"){e.preventDefault();delTrack();return;}
+  if(/^[0-9]$/.test(e.key)&&!inInput){ $("pidIn").focus(); $("pidIn").value+=e.key; e.preventDefault(); }
+});
+
+dsBandInit();
+loadState();
+</script>
+</body>
+</html>

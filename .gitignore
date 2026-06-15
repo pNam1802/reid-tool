@@ -1,0 +1,32 @@
+# ───────── Python ─────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ───────── Dữ liệu tạm của pipeline (sinh ra khi chạy, không commit) ─────────
+# video/ = video đầu vào (mỗi camera 1 file mp4)
+# crops/ = ảnh crop theo track | montages/ = ảnh lưới gán nhãn | labels.csv = nhãn đợt hiện tại
+video/
+crops/
+montages/
+labels.csv
+*.mp4
+
+# ───────── Dataset thật (ảnh người, PII — KHÔNG public) ─────────
+myreid/
+myreid.zip
+*.zip
+
+# ───────── Ảnh/screenshot tạm khi test ─────────
+_test_*.html
+_test_*.png
+
+# ───────── OS / editor ─────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
