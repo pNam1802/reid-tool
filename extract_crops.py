@@ -1,6 +1,6 @@
 # ===================== CẤU HÌNH — SỬA Ở ĐÂY =====================
-VIDEO_PATH    = "video/20260612_1430_cam5.mp4"   # đường dẫn đến file video
-CAM_ID        = 3                   # ID camera (số nguyên)
+VIDEO_PATH    = "video/20260613_1510_cam3.mp4"   # đường dẫn đến file video
+CAM_ID        = 1                   # ID camera (số nguyên)
 OUTPUT_DIR    = "crops"             # thư mục gốc lưu kết quả
 RESET_CAM     = False               # True  = xóa sạch crops/cam{C}/ rồi chạy lại từ đầu
                                     # False = đánh số track NỐI TIẾP dữ liệu cũ (tích lũy)
@@ -9,6 +9,7 @@ MIN_HEIGHT    = 80                  # chiều cao upbody tối thiểu (pixel)
 MAX_PER_TRACK = 25                  # số ảnh tối đa mỗi tracklet
 MIN_GAP       = 24                  # cách nhau tối thiểu N frame giữa 2 ảnh CÙNG track
                                     # (chống ảnh trùng lặp khi người đứng yên)
+ZONE_POINTS   = []                  # polygon [[x,y],...] tọa độ pixel gốc — [] = không lọc
 # =================================================================
 
 import csv
@@ -134,6 +135,14 @@ def main():
             # Lọc upbody quá nhỏ
             if (ub_y2 - ub_y1) < MIN_HEIGHT:
                 continue
+
+            # Lọc theo zone (nếu có): kiểm tra bottom-center (chân người)
+            if ZONE_POINTS:
+                cx = (ub_x1 + ub_x2) // 2
+                cy = ub_y2  # dùng chân người để khớp với zone vẽ trên sàn
+                zone_arr = np.array(ZONE_POINTS, dtype=np.int32)
+                if cv2.pointPolygonTest(zone_arr, (float(cx), float(cy)), False) < 0:
+                    continue  # ngoài zone → bỏ qua
 
             # Loại crop degenerate (sau clamp vẫn bị rỗng)
             if ub_x2 <= ub_x1 or ub_y2 <= ub_y1:

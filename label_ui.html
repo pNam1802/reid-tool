@@ -254,12 +254,37 @@
          pointer-events:none;box-shadow:var(--shadow);font-weight:560;font-size:13.5px}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
   .toast.err{background:var(--bad)}
+
+  /* ── Zone editor ── */
+  .zone-modal{position:fixed;inset:0;background:rgba(10,14,20,.72);backdrop-filter:blur(3px);z-index:55;
+             display:flex;align-items:center;justify-content:center;padding:20px}
+  .zone-panel{background:var(--surface);border-radius:var(--radius);width:min(1100px,96vw);
+              display:flex;flex-direction:column;box-shadow:var(--shadow);overflow:hidden;height:88vh;max-height:94vh}
+  .zone-head{display:flex;align-items:center;gap:10px;padding:12px 18px;border-bottom:1px solid var(--border)}
+  .zone-head b{font-size:15px}
+  .zone-status{font-size:12px;padding:3px 10px;border-radius:99px;font-weight:650}
+  .zone-status.active{background:var(--ok-weak);color:var(--ok)}
+  .zone-status.empty{background:var(--card);color:var(--dim)}
+  .zone-canvas-area{flex:1;overflow:hidden;position:relative;background:#0a0e14;display:flex;
+                    align-items:center;justify-content:center;min-height:0}
+  .zone-canvas-area img{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+                         max-width:100%;max-height:100%;display:block;pointer-events:none;user-select:none}
+  .zone-canvas-area canvas{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+                            max-width:100%;max-height:100%;cursor:crosshair}
+  .zone-foot{padding:12px 18px;border-top:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex-shrink:0}
+  .zone-hint{font-size:12px;color:var(--dim);margin-left:auto;line-height:1.5;text-align:right}
+  .zone-slider-row{padding:8px 18px 4px;border-top:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-shrink:0}
+  .zone-slider-row label{font-size:12px;color:var(--dim);white-space:nowrap}
+  .zone-slider-row input[type=range]{flex:1;accent-color:var(--accent)}
+  .zone-slider-row span{font-size:12px;color:var(--dim);min-width:32px;text-align:right}
+  .vid-row .zone-btn{padding:5px 11px;font-size:12.5px}
+  .vid-row .zone-btn.has-zone{background:var(--ok-weak);border-color:var(--ok);color:var(--ok)}
 </style>
 </head>
 <body>
 
 <header>
-  <div class="brand"><span class="dot"></span> Re-ID Pipeline <span style="font-size:10px;color:var(--faint);font-weight:500">v5</span></div>
+  <div class="brand"><span class="dot"></span> Re-ID Pipeline <span style="font-size:10px;color:var(--faint);font-weight:500">v6</span></div>
   <div class="steps" id="steps">
     <span class="step" data-s="idle"><span class="n">1</span> Video</span>
     <span class="step" data-s="processing"><span class="n">2</span> Crop + montage</span>
@@ -312,10 +337,38 @@
   </div>
 </div>
 
+<!-- Zone Editor Modal -->
+<div class="zone-modal" id="zoneModal" style="display:none">
+  <div class="zone-panel">
+    <div class="zone-head">
+      <b id="zoneTitle">Vẽ zone — Cam ?</b>
+      <span class="zone-status empty" id="zoneStatusBadge">Chưa có zone</span>
+      <span class="muted" style="font-size:12px;margin-left:4px" id="zonePtCount"></span>
+      <button id="zUndoBtn" style="margin-left:auto">&#8617; Undo</button>
+      <button id="zClearBtn" class="warn">Xóa zone</button>
+      <button id="zSaveBtn" class="green">&#128190; Lưu zone</button>
+      <button id="zCancelBtn">&#10005; Đóng</button>
+    </div>
+    <div class="zone-canvas-area" id="zoneArea">
+      <img id="zoneFrameImg" alt="frame video">
+      <canvas id="zoneCanvas"></canvas>
+    </div>
+    <div class="zone-slider-row">
+      <label>Vị trí frame:</label>
+      <input type="range" id="zFrameSlider" min="0" max="100" value="10">
+      <span id="zFramePct">10%</span>
+    </div>
+    <div class="zone-foot">
+      <span class="muted" style="font-size:12px">&#9432;</span>
+      <span class="zone-hint">Click để thêm điểm &middot; Click lại điểm đầu (≤ 20px) để đóng polygon &middot; Cần ≥ 3 điểm để lưu</span>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
-console.log("Re-ID UI build: grid-rows-fix-v5 (sửa thẻ bị nén dẹt trong rail/gallery)");
+console.log("Re-ID UI build: zone-editor-fix-v6 (frame video hiện đúng trong trình vẽ zone)");
 const $ = id => document.getElementById(id);
 let STATE = null, DATA = null;
 let TRACKS = [], camFilter = "all", view = [], cur = 0, lastPid = null, NEXT_PID = 0, DS_PIDS = [];
@@ -348,21 +401,32 @@ function updateHeader(d){
   $("dsInfo").textContent = `Dataset · ${ds.identities||0} người · ${ds.train||0} train · ${ds.query||0} query · ${ds.gallery||0} gallery`;
 }
 
-// ── 1. IDLE ──────────────────────────────────────────────────────────────────
+// ── 1. IDLE (+ zone buttons) ──────────────────────────────────────────────────────
+let ZONES = {};   // {"1": [[x,y],...], "2": [...], ...}
+
 function renderIdle(d){
+  ZONES = d.zones || {};
   const vids = d.videos||[];
-  let rows = vids.map(v=>`
+  let rows = vids.map(v=>{
+    const camKey = String(v.cam_id);
+    const hasZone = ZONES[camKey] && ZONES[camKey].length >= 3;
+    const zoneBtnCls = hasZone ? 'zone-btn has-zone' : 'zone-btn';
+    const zoneBtnTxt = hasZone ? `&#128204; Zone (${ZONES[camKey].length} điểm)` : '&#128204; Vẽ Zone';
+    return `
     <div class="vid-row">
       <span style="flex:1">${v.name}</span>
       <label class="muted">Cam</label>
       <input type="number" min="1" value="${v.cam_id}" data-vid="${encodeURIComponent(v.video)}">
-    </div>`).join("");
+      <button class="${zoneBtnCls}" data-zv="${encodeURIComponent(v.video)}" data-zcam="${v.cam_id}"
+              onclick="openZoneEditor(this.dataset.zcam, decodeURIComponent(this.dataset.zv))">${zoneBtnTxt}</button>
+    </div>`;
+  }).join("");
   $("view").innerHTML = `
     <div class="page"><div class="page-wrap">
       ${commitStatsHTML()}
       <h2>Đưa video vào</h2>
       <div class="box">
-        <p class="muted">Bỏ các file <b>.mp4</b> vào thư mục <code>video/</code> (mỗi file là một camera), rồi bấm quét.</p>
+        <p class="muted">Bỏ các file <b>.mp4</b> vào thư mục <code>video/</code> (mỗi file là một camera), rồi bấm quét. Tùy chọn: vẽ <b>zone</b> cho từng camera để chỉ lấy người trong vùng quan tâm.</p>
         <div style="margin-top:12px">${rows || '<p class="muted">Chưa thấy video nào trong video/</p>'}</div>
         <div style="margin-top:16px;display:flex;gap:10px">
           <button onclick="loadState()">Quét lại</button>
@@ -382,6 +446,72 @@ function renderIdle(d){
     };
   }
 }
+
+// ── Zone Editor Logic ────────────────────────────────────────────────────────
+let Z_VID = "", Z_CAM = 0, Z_PTS = [], Z_CTX = null, Z_IMG = new Image();
+async function openZoneEditor(cam, vid){
+  Z_VID=vid; Z_CAM=cam; Z_PTS = ZONES[cam] ? ZONES[cam].map(p=>[...p]) : [];
+  $("zoneTitle").textContent=`Vẽ zone — Cam ${cam}`;
+  $("zoneModal").style.display="flex";
+  const pos = ($("zFrameSlider").value||10)/100;
+  const frameUrl = "/frame?video="+encodeURIComponent(vid)+"&pos="+pos;
+  const img=$("zoneFrameImg");
+  img.onload=()=>{
+    const cvs=$("zoneCanvas"); Z_CTX=cvs.getContext("2d");
+    cvs.width=img.naturalWidth; cvs.height=img.naturalHeight;
+    drawZone();
+  };
+  img.src=frameUrl;
+}
+function drawZone(){
+  if(!Z_CTX) return;
+  Z_CTX.clearRect(0,0,Z_CTX.canvas.width, Z_CTX.canvas.height);
+  Z_CTX.strokeStyle="#2f6fed"; Z_CTX.lineWidth=3; Z_CTX.fillStyle="rgba(47,111,237,.2)";
+  if(Z_PTS.length){
+    Z_CTX.beginPath(); Z_CTX.moveTo(Z_PTS[0][0], Z_PTS[0][1]);
+    Z_PTS.forEach(p=>Z_CTX.lineTo(p[0],p[1]));
+    if(Z_PTS.length>2) Z_CTX.closePath();
+    Z_CTX.fill(); Z_CTX.stroke();
+    Z_PTS.forEach(p=>{
+      Z_CTX.fillStyle="#fff"; Z_CTX.fillRect(p[0]-4, p[1]-4, 8, 8);
+    });
+  }
+  $("zonePtCount").textContent = `${Z_PTS.length} điểm`;
+  $("zoneStatusBadge").className = `zone-status ${Z_PTS.length>=3?'active':'empty'}`;
+  $("zoneStatusBadge").textContent = Z_PTS.length>=3 ? "Zone hợp lệ" : "Chưa đủ điểm";
+}
+$("zoneCanvas").onclick=(e)=>{
+  const cvs=$("zoneCanvas");
+  const rect=cvs.getBoundingClientRect();
+  // Scale click coords from displayed size back to canvas/image pixel coords
+  const scaleX=cvs.width/rect.width, scaleY=cvs.height/rect.height;
+  const x=(e.clientX-rect.left)*scaleX, y=(e.clientY-rect.top)*scaleY;
+  if(Z_PTS.length>0){
+    const d=Math.hypot(x-Z_PTS[0][0], y-Z_PTS[0][1]);
+    if(d<20*scaleX) return;  // click near first point = close polygon (visual only)
+  }
+  Z_PTS.push([Math.round(x),Math.round(y)]); drawZone();
+};
+$("zUndoBtn").onclick=()=>{ Z_PTS.pop(); drawZone(); };
+$("zCancelBtn").onclick=()=>{$("zoneModal").style.display="none";};
+$("zSaveBtn").onclick=async()=>{
+  if(Z_PTS.length<3){toast("Cần ≥ 3 điểm để tạo zone",true); return;}
+  const updated = {...ZONES, [String(Z_CAM)]: Z_PTS};
+  const r = await post("/api/zones", {zones: updated});
+  if(r&&r.ok){ ZONES=updated; toast("Đã lưu zone Cam "+Z_CAM); }
+  $("zoneModal").style.display="none"; loadState();
+};
+$("zClearBtn").onclick=async()=>{
+  Z_PTS=[]; drawZone();
+  // Xóa hẳn zone của cam này
+  const updated = {...ZONES}; delete updated[String(Z_CAM)];
+  await post("/api/zones", {zones: updated});
+  ZONES=updated; toast("Đã xóa zone Cam "+Z_CAM);
+};
+$("zFrameSlider").oninput=(e)=>{
+  const pos=e.target.value/100; $("zFramePct").textContent=e.target.value+"%";
+  $("zoneFrameImg").src="/frame?video="+encodeURIComponent(Z_VID)+"&pos="+pos;
+};
 
 // ── 2. PROCESSING ────────────────────────────────────────────────────────────
 function renderProcessing(){
@@ -976,12 +1106,14 @@ let tt; function toast(m,err){ const e=$("toast"); e.textContent=m; e.className=
 // ── Phím tắt ─────────────────────────────────────────────────────────────────
 document.addEventListener("keydown",e=>{
   if(e.key==="Escape"){
+    if($("zoneModal").style.display!=="none"){ e.preventDefault(); $("zoneModal").style.display="none"; return; }
     if($("preview").style.display!=="none"){ e.preventDefault(); closePreview(); return; }
     if($("dsBrowser").style.display!=="none"){ e.preventDefault();
       if(dsPid!==null) renderDsList(); else closeDataset(); return; }
     if($("gallery").style.display!=="none"){ e.preventDefault(); closeGallery(); return; }
     return;
   }
+  if($("zoneModal").style.display!=="none") return;  // zone editor mở: không dùng phím tắt khác
   if($("preview").style.display!=="none") return;
   if($("dsBrowser").style.display!=="none") return;  // dataset mở: không dùng phím tắt gán
   if($("gallery").style.display!=="none") return;   // gallery mở: không dùng phím tắt gán

@@ -19,6 +19,7 @@ TEST_RATIO    = 0.3
 #   "drop"       = bỏ hẳn, không đưa vào dataset
 SINGLE_CAM_MODE = "distractor"
 DISTRACTOR_BASE = 100000      # pid >= giá trị này là distractor, KHÔNG phải identity train/reuse
+ZONES_FILE   = "zones.json"   # lưu zone vẽ tay theo cam_id (tích lũy vĩnh viễn)
 
 HOST         = "127.0.0.1"
 PORT         = 8000
@@ -66,6 +67,25 @@ _LOCK = threading.Lock()
 # Tiến trình xử lý nền (extract + montage)
 PROGRESS = {"running": False, "phase": "", "done": False, "error": ""}
 LOG = deque(maxlen=40)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Zones (ROI polygon) — lưu theo cam_id (string key vì JSON key luôn là string)
+# ══════════════════════════════════════════════════════════════════════════════
+def load_zones() -> dict:
+    """Load zones.json → dict {"1": [[x,y],...], ...}. Trả {} nếu chưa có."""
+    p = HERE / ZONES_FILE
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_zones(zones: dict) -> None:
+    p = HERE / ZONES_FILE
+    p.write_text(json.dumps(zones, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -613,14 +633,21 @@ def label_stats() -> dict:
 def run_pipeline(cameras: list[dict]) -> None:
     PROGRESS.update(running=True, phase="extract", done=False, error="")
     LOG.clear()
+    zones = load_zones()
     try:
         for cam in cameras:
-            LOG.append(f"=== CROP cam {cam['cam_id']}: {cam['video']} ===")
+            cam_id_str = str(cam["cam_id"])
+            zone_pts = zones.get(cam_id_str, [])
+            if zone_pts:
+                LOG.append(f"=== CROP cam {cam['cam_id']}: {cam['video']} (có zone: {len(zone_pts)} điểm) ===")
+            else:
+                LOG.append(f"=== CROP cam {cam['cam_id']}: {cam['video']} (không có zone) ===")
             write_config("extract_crops.py", {
                 "VIDEO_PATH": cam["video"], "CAM_ID": int(cam["cam_id"]),
                 "OUTPUT_DIR": CROPS_DIR, "RESET_CAM": False,
                 "SAVE_EVERY": SAVE_EVERY, "MIN_HEIGHT": MIN_HEIGHT,
                 "MAX_PER_TRACK": MAX_PER_TRACK, "MIN_GAP": MIN_GAP,
+                "ZONE_POINTS": zone_pts,
             })
             if not run_step("extract_crops.py"):
                 raise RuntimeError(f"Extract cam {cam['cam_id']} lỗi")
@@ -705,6 +732,30 @@ class Handler(BaseHTTPRequestHandler):
                 self._bytes(Path(rec["montage"]).read_bytes(), "image/jpeg"); return
             self._json({"error": "no montage"}, 404); return
 
+        if path == "/frame":
+            # Trả về 1 frame JPEG từ video (dùng cho zone editor)
+            # Query: ?video=<path>&pos=<0.0-1.0>
+            video = qs.get("video", [""])[0]
+            pos   = qs.get("pos", ["0.1"])[0]
+            if not video:
+                self._json({"error": "no video"}, 400); return
+            try:
+                pos_f = max(0.0, min(1.0, float(pos)))
+            except ValueError:
+                pos_f = 0.1
+            env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+            # Ghi config extract_frame.py
+            write_config("extract_frame.py", {"VIDEO_PATH": video, "POS": pos_f})
+            proc = subprocess.Popen(
+                [PYTHON, "-u", str(HERE / "extract_frame.py")],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                cwd=str(HERE), env=env,
+            )
+            frame_bytes, err = proc.communicate()
+            if proc.returncode != 0 or not frame_bytes:
+                self._json({"error": "frame extract failed", "detail": err.decode(errors='replace')}, 500); return
+            self._bytes(frame_bytes, "image/jpeg"); return
+
         if path == "/crop":
             # Ảnh dự phòng: track chưa có montage (ít ảnh) vẫn xem được 1 crop
             td = qs.get("track_dir", [""])[0]
@@ -758,6 +809,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._bytes(f.read_bytes(), "image/jpeg"); return
             self._json({"error": "no image"}, 404); return
 
+        if path == "/api/zones":
+            self._json({"zones": load_zones()}); return
+
         self._json({"error": "not found"}, 404)
 
     def _state_payload(self):
@@ -765,6 +819,7 @@ class Handler(BaseHTTPRequestHandler):
         payload = {"state": state, "dataset": dataset_stats()}
         if state == "idle":
             payload["videos"] = scan_videos()
+            payload["zones"] = load_zones()
         elif state == "processing":
             payload["progress"] = {**PROGRESS, "log": list(LOG)}
         elif state == "montage_pending":
@@ -903,6 +958,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "Đang chạy"}, 409); return
             result = commit_to_dataset()
             self._json({"ok": True, "result": result}); return
+
+        if path == "/api/zones":
+            save_zones(body.get("zones", {}))
+            self._json({"ok": True}); return
 
         self._json({"error": "not found"}, 404)
 
