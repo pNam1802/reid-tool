@@ -1,293 +1,263 @@
-# Hệ thống thu thập dữ liệu Person Re-Identification (Re-ID)
+# Re-ID Data Pipeline
 
-Pipeline thu thập ảnh **upbody** từ hệ thống 3 camera để xây dựng dataset
-chuẩn **Market-1501**, phục vụ train model **TransReID**. Toàn bộ chạy qua
-**một web app duy nhất**: `label_server.py`.
+Công cụ **thu thập & gán nhãn** dữ liệu Person Re-Identification (Re-ID) từ hệ
+thống nhiều camera, xây dựng dataset chuẩn **Market-1501** để train model Re-ID
+(TransReID, OSNet…).
+
+Toàn bộ chạy qua **một web app duy nhất** — `label_server.py` — tự dẫn bạn theo
+từng bước, giữ trạng thái, lưu kết quả tự động.
 
 ```
-        Bỏ 3 video vào folder video/
-                   │
-        python label_server.py   (mở web, tự dẫn theo trạng thái)
-                   │
-   ┌───────────────┴───────────────────────────────────────────┐
-   │ 1. Crop      → cắt ảnh upbody theo track (ByteTrack)  → crops/      (TẠM) │
-   │ 2. Montage   → ảnh lưới mỗi track để gán nhãn         → montages/   (TẠM) │
-   │ 3. Gán ID    → BẠN gán ID thủ công bằng bàn phím      → labels.csv  (TẠM) │
-   │ 4. Gộp       → đưa ảnh đã gán vào dataset Market-1501 → dataset/    (GIỮ) │
-   └───────────────┬───────────────────────────────────────────┘
-                   │  Gộp xong: XÓA sạch crops/ montages/ labels.csv + video,
-                   ▼  chỉ giữ dataset/ lớn dần qua từng đợt.
-            dataset/  →  train TransReID
+   Bỏ video vào video/  ──►  python label_server.py  ──►  mở http://127.0.0.1:8000
+                                       │
+   ┌───────────────────────────────────┴──────────────────────────────────────┐
+   │ (tuỳ chọn) Vẽ Zone  → chỉ lấy người trong vùng quan tâm mỗi camera          │
+   │ 1. Crop             → cắt ảnh upbody theo track (ByteTrack)  → crops/   TẠM  │
+   │ 2. Montage          → ảnh lưới mỗi track để gán nhãn         → montages/ TẠM │
+   │ 3. Gán ID           → gán ID thủ công bằng bàn phím          → labels.csv TẠM│
+   │ 4. Gộp vào dataset  → đưa ảnh đã gán vào Market-1501         → myreid/  GIỮ  │
+   └───────────────────────────────────┬──────────────────────────────────────┘
+                                        │  Gộp xong: XÓA sạch crops/ montages/
+                                        ▼  labels.csv + video đã xử lý.
+                                  myreid/  ──►  train model Re-ID
 ```
 
-**Thu thập liên tục:** mỗi lần có video mới, lặp lại 4 bước; dataset tích lũy
-thêm. Người đã có trong dataset được hiện lại để bạn **tái dùng ID cũ** (giữ
-nhất quán identity qua các đợt).
+**Thu thập liên tục:** mỗi lần có video mới, lặp lại các bước; dataset tích lũy
+lớn dần. Người đã có được hiển thị lại để **tái dùng ID cũ** → giữ nhất quán
+identity qua các đợt và các camera.
 
-> Các script `extract_crops.py`, `make_montages.py` vẫn là từng bước riêng,
-> được `label_server.py` gọi tự động. `pipeline.py` (Streamlit) và
-> `build_dataset.py` là công cụ cũ/độc lập, không bắt buộc dùng nữa.
+---
+
+## Tính năng
+
+- 🎬 **Pipeline web trọn gói**: crop → montage → gán ID → gộp dataset, không cần
+  dòng lệnh, không mất state khi đóng/mở lại.
+- 📌 **Vẽ Zone (ROI)** cho từng camera trên **frame thật của video** — chỉ giữ
+  người có chân nằm trong vùng quan tâm (giảm nhiễu, dataset sạch hơn).
+- ⌨️ **Gán ID bằng bàn phím**, gợi ý số ID kế tiếp, tái dùng ID người cũ.
+- 👥 **Gallery "Người đã có"**: xem/đối chiếu mọi identity đang có khi gán nhãn.
+- 🗂 **Trình duyệt Dataset**: xem từng ID, mọi ảnh theo split/camera, **kéo
+  chọn nhiều ảnh để xóa**, đặt ảnh đại diện, xóa hẳn người.
+- 🧹 **Chống camera-bias**: người chỉ xuất hiện ở 1 camera được đưa vào gallery
+  làm *distractor* (không thành identity train) — đánh giá sát thực tế hơn.
 
 ---
 
 ## 1. Cài đặt
 
 ```bash
-pip install ultralytics supervision opencv-python
+pip install ultralytics supervision opencv-python numpy
 ```
 
-`label_server.py` (web + điều phối) chỉ dùng **thư viện chuẩn Python** —
-không cần fastapi/streamlit/torchreid. Các thư viện trên là để
-`extract_crops.py` chạy (YOLO + ByteTrack + OpenCV).
+- **`label_server.py`** (web + điều phối) chỉ dùng **thư viện chuẩn Python** —
+  không cần fastapi/streamlit. Các thư viện trên là để `extract_crops.py` chạy
+  (YOLO + ByteTrack + OpenCV).
+- Cần file model **`head_detect.pt`** đặt cùng thư mục với `head_detect.py`
+  (đã kèm trong repo).
+- **Python 3.10+**. Có **GPU** thì bước Crop nhanh hơn nhiều (không bắt buộc).
 
-Yêu cầu thêm:
-- File model **`head_detect.pt`** đặt cùng thư mục với `head_detect.py`.
-- Python 3.10+.
+> 📦 **Dataset & video KHÔNG nằm trong repo** (đã `.gitignore`). Mỗi người tự bỏ
+> video vào `video/`; thư mục `myreid/` sẽ tự sinh và lớn dần trên máy bạn.
 
 ---
 
-## Chạy nhanh
+## 2. Chạy nhanh
 
 ```bash
 python label_server.py
 ```
 
-Tự mở `http://127.0.0.1:8000`. Web tự biết đang ở bước nào:
-- **Sạch** → cho bỏ video vào `video/` và bấm *Bắt đầu Crop + Montage*.
-- **Đang dở** (ví dụ đã crop nhưng chưa montage/gán) → **bắt làm nốt** rồi
-  mới cho thêm video mới.
-- **Gán xong** → nút *Gộp vào dataset* → dọn tạm, dataset lớn lên.
+Tự mở `http://127.0.0.1:8000`. Web tự nhận biết đang ở bước nào:
 
-**Phím tắt khi gán ID:** `0-9` gõ ID · `Enter` gán + sang kế ·
-`Space` cùng ID track trước · `←`/`→` di chuyển · `S` bỏ qua · `Del` xóa track.
-Quy tắc: **cùng người = cùng ID** (kể cả khác camera/khác đợt). Người đã có
-trong dataset hiện ở cột phải (thẻ tím) — bấm để tái dùng ID cũ.
-
----
-
-## 2. Cấu trúc thư mục
-
-```
-ReID/
-├── head_detect.py        # wrapper model detect đầu (KHÔNG SỬA)
-├── head_detect.pt        # weights model
-├── scale_box.py          # mở rộng box đầu → vùng upbody (KHÔNG SỬA)
-│
-├── pipeline.py           # ⭐ DASHBOARD điều khiển toàn bộ pipeline
-├── extract_crops.py      # Bước 1
-├── make_montages.py      # Bước 2
-├── label_manual.py       # Bước 3 (giao diện gán nhãn)
-├── build_dataset.py      # Bước 4
-│
-├── video/                # 📂 ĐẶT VIDEO VÀO ĐÂY
-│   ├── cam1.mp4
-│   ├── cam2.mp4
-│   └── cam3.mp4
-│
-├── crops/                # output bước 1 (tự tạo)
-│   ├── cam1_b20260612/   #   mỗi camera × mỗi batch (ngày) 1 thư mục
-│   │   ├── track0001/    #   mỗi track = 1 người được theo dõi liên tục
-│   │   │   ├── f000008.jpg
-│   │   │   └── ...
-│   │   └── track0002/
-│   └── meta_cam1_b20260612.csv
-│
-├── montages/             # output bước 2 (tự tạo)
-│   └── cam1_b20260612_track0001.jpg
-│
-├── labels.csv            # output bước 3 — file nhãn trung tâm
-│
-└── myreid/               # output bước 4 — dataset Market-1501
-    ├── bounding_box_train/
-    ├── query/
-    └── bounding_box_test/
-```
+| Trạng thái | Ý nghĩa |
+|---|---|
+| **idle** (sạch) | cho bỏ video vào `video/`, (tuỳ chọn) vẽ zone, rồi bấm *Bắt đầu Crop + Montage* |
+| **processing** | đang crop/montage — xem log trực tiếp |
+| **montage_pending** | có crop nhưng chưa montage (server tắt giữa chừng) → bấm làm nốt |
+| **label** | còn track chưa gán → màn gán ID |
+| **commit** | đã gán xong → *Xem lại theo ID* rồi *Gộp vào dataset* |
 
 ---
 
-## 3. Cách chạy
+## 3. Quy trình chi tiết
 
-### Cách 1 — Dùng dashboard (khuyến nghị)
+### Bước 0 (tuỳ chọn) — Vẽ Zone cho từng camera
 
-```bash
-streamlit run pipeline.py
-```
+Ở màn **idle**, mỗi video có nút **📌 Vẽ Zone**:
 
-Mở trình duyệt tại `http://localhost:8501`. Dashboard có 4 tab tương ứng
-4 bước, kèm trạng thái từng bước (✅ xong / ⬜ chưa). Chạy lần lượt:
+1. Bấm → web lấy **frame thật của video** ra (kéo slider *Vị trí frame* để đổi
+   frame nền; 0% = frame đầu).
+2. **Click các điểm** để khoanh vùng quan tâm (đa giác tự do), click lại điểm
+   đầu (≤20px) để đóng polygon. Cần ≥ 3 điểm.
+3. **Lưu zone**.
 
-1. **Tab Bước 1** — đặt video vào thư mục `video/`, dashboard tự quét và gán
-   cam ID theo thứ tự tên file. Kiểm tra lại rồi bấm **▶ Chạy extract**.
-   Log hiện trực tiếp trên màn hình.
-2. **Tab Bước 2** — bấm **▶ Chạy make_montages**.
-3. **Tab Bước 3** — mở terminal mới, chạy:
-   ```bash
-   streamlit run label_manual.py --server.port 8502
-   ```
-   rồi gán nhãn (xem mục 4 bên dưới).
-4. **Tab Bước 4** — bấm **▶ Build dataset**.
+Mỗi camera **một zone**, lưu vĩnh viễn trong `zones.json`. Khi Crop, chỉ người có
+**chân (bottom-center)** nằm trong zone mới được giữ lại.
 
-### Cách 2 — Chạy từng script
+### Bước 1–2 — Crop + Montage (tự động)
 
-Mỗi script có **CONFIG block** ở đầu file. Mở file, sửa biến, chạy
-`python <script>.py`. Không cần truyền tham số dòng lệnh.
+Bấm *Bắt đầu Crop + Montage*. Server lần lượt:
 
-```python
-# ===================== CẤU HÌNH — SỬA Ở ĐÂY =====================
-VIDEO_PATH    = "video/cam1.mp4"
-CAM_ID        = 1
-...
-# =================================================================
-```
+- **Crop** (`extract_crops.py`): đọc video → detect đầu người mỗi frame → mở rộng
+  thành vùng **upbody** → theo dõi qua các frame bằng **ByteTrack** → lưu crop
+  vào `crops/cam{C}/track{NNNN}/`. Mỗi *track* = một người được theo dõi liên tục.
+- **Montage** (`make_montages.py`): mỗi track ghép thành **1 ảnh lưới** để gán
+  nhãn nhanh bằng mắt (track quá ít ảnh sẽ bị bỏ qua, mặc định < 3 ảnh).
 
-Với 3 camera: chạy `extract_crops.py` **3 lần**, mỗi lần đổi
-`VIDEO_PATH` + `CAM_ID`.
-
----
-
-## 4. Chi tiết từng bước
-
-### Bước 1 — `extract_crops.py` (tự động)
-
-Đọc video → detect đầu người từng frame (`head_detect.py`) → mở rộng box
-đầu thành vùng upbody (`scale_box.py`) → track qua frame bằng **ByteTrack**
-→ lưu crop.
-
-| Tham số | Mặc định | Ý nghĩa |
-|---|---|---|
-| `SAVE_EVERY` | 8 | lưu 1 ảnh mỗi 8 frame (tracker vẫn chạy mọi frame) |
-| `MIN_HEIGHT` | 80 | bỏ crop thấp hơn 80px (người quá xa) |
-| `MAX_PER_TRACK` | 25 | tối đa 25 ảnh / track |
-| `BATCH_ID` | "" | để trống = tự dùng ngày hôm nay (`b20260612`) |
-
-**Khái niệm track:** một người đi qua camera được ByteTrack theo dõi liên
-tục = 1 track = 1 thư mục ảnh. Nếu người bị che khuất rồi xuất hiện lại,
-có thể bị **nhảy ID** thành track mới — sẽ xử lý ở bước gán nhãn.
-
-Chạy xong in thống kê: tổng track, số track có ≥3 ảnh, tổng ảnh.
-
-### Bước 2 — `make_montages.py` (tự động)
-
-Mỗi track → 1 **ảnh lưới** (tối đa 10 ảnh đại diện chọn đều theo thời gian,
-xếp 5 cột). Track có < 3 ảnh bị bỏ qua. Ảnh lưới chỉ dùng để **xem bằng
-mắt** khi gán nhãn, không dùng để train.
-
-### Bước 3 — `label_server.py` (thủ công — quan trọng nhất)
-
-```bash
-python label_server.py
-```
-
-Tự mở trình duyệt tại `http://127.0.0.1:8000`. **Không cần cài thư viện
-ngoài** (chỉ dùng thư viện chuẩn Python) và **không cần AI/torchreid**.
+### Bước 3 — Gán ID (thủ công — quan trọng nhất)
 
 Đây là bước duy nhất cần con người: xác nhận **track nào là người nào**.
-Web app này thay cho `label_manual.py` (Streamlit) cũ — mượt hơn nhiều vì
-trình duyệt giữ state, chuyển track tức thì, lưu CSV chạy ngầm.
 
-**Gán nhãn bằng bàn phím (không cần chuột):**
+**Phím tắt (gán không cần chuột):**
 
 | Phím | Hành động |
 |---|---|
-| `0`–`9` | gõ số PID |
-| `Enter` | gán PID vừa gõ + tự sang track kế |
-| `Space` | gán **cùng PID với track trước** + sang kế |
+| `0`–`9` | gõ số ID |
+| `Enter` | gán ID vừa gõ + tự sang track kế |
+| `Space` | gán **cùng ID với track trước** + sang kế |
 | `→` / `←` | sang track kế / trước (không gán) |
-| `S` | bỏ qua track này (pid = -1) |
-| `Delete` | xóa hẳn track (ảnh gốc + montage + dòng CSV, có hỏi xác nhận) |
+| `S` | bỏ qua track này (nhiễu/mờ) — không đưa vào dataset |
+| `Delete` | xóa hẳn track (ảnh gốc + montage + dòng nhãn, có xác nhận) |
+
+**Quy tắc ID duy nhất:**
+
+> **Cùng một người ngoài đời = cùng một ID** — bất kể khác camera, khác track
+> hay khác đợt. Khác người = khác ID. Web gợi ý sẵn số ID mới kế tiếp.
 
 **Giao diện:**
-- **Giữa** — montage track đang xét + thông tin cam/track/số ảnh + PID.
-- **Cột phải** — panel *📌 PID đã gán* (1 ảnh đại diện mỗi PID — nhìn vào
-  đây để đối chiếu khi label camera khác; bấm vào 1 PID để gán cho track
-  hiện tại).
-- **Thanh trên** — lọc theo camera + thanh tiến trình.
+- **Giữa** — montage track đang xét + thông tin cam/track/số ảnh + dải ảnh trong
+  track (bấm `×` để xóa lẻ ảnh dính người khác khi track bị nhảy ID).
+- **Cột phải "ID đã gán"** — 1 ảnh đại diện mỗi ID; bấm để xem to / tái dùng.
+- **Nút "👥 Người đã có"** — gallery toàn bộ identity đang có trong dataset, tìm
+  theo ID; bấm 1 người để gán lại ID cũ cho track hiện tại.
+- **"Xem lại theo ID"** — gom track theo ID để soát lại trước khi gộp.
 
-> `label_manual.py` (Streamlit) vẫn giữ lại làm bản dự phòng nếu cần.
-
-**PID (Person ID)** — số định danh người. Quy tắc duy nhất:
-
-> **Cùng một người ngoài đời = cùng một số PID** — bất kể khác camera,
-> khác track, hay khác batch. Khác người = khác số.
-
-Số không cần liên tục, `build_dataset.py` tự đánh lại từ 0.
-
-**Quy trình gán hiệu quả:**
-
-1. Label hết **Cam 1** trước: mỗi người một số PID mới (0, 1, 2...).
-2. Chuyển sang **Cam 2**: nhìn ảnh track → đối chiếu panel "PID đã gán"
-   → người cũ thì gõ đúng PID cũ, người mới thì dùng số gợi ý.
-3. Tương tự **Cam 3**.
-
-**Các nút:**
-
-| Nút | Khi nào dùng |
-|---|---|
-| ✅ Gán + Tiếp | xác nhận PID, tự nhảy sang track kế |
-| 🗑 Bỏ qua | track nhiễu / mờ / không muốn dùng → `pid = -1`, bị loại khi build |
-| 🗑 Xóa track này | crop **detect sai hoàn toàn** (dính nhiều người, không phải người...) → xóa cả ảnh gốc lẫn dòng CSV (có bước xác nhận) |
+**Quy trình gán hiệu quả:** label hết **Cam 1** trước (mỗi người 1 ID mới) →
+sang **Cam 2/3**: đối chiếu "Người đã có" / "ID đã gán", người cũ gõ đúng ID cũ,
+người mới dùng số gợi ý.
 
 **Trường hợp đặc biệt:**
-- *Một người bị nhảy ID thành nhiều track* → gán **cùng PID** cho tất cả
-  các track đó (đừng xóa — càng nhiều ảnh model học càng tốt).
-- *Crop dính 2 người trở lên* → Bỏ qua hoặc Xóa.
+- *Một người bị nhảy ID thành nhiều track* → gán **cùng ID** cho tất cả (đừng
+  xóa — càng nhiều ảnh càng tốt).
+- *Crop dính 2 người* → Bỏ qua (`S`) hoặc Xóa (`Delete`), hoặc xóa lẻ ảnh xấu.
 
-Kết quả lưu vào `labels.csv` — **tự động lưu** sau mỗi lần bấm nút.
+Nhãn lưu vào `labels.csv`, **tự động lưu** sau mỗi thao tác.
 
-### Bước 4 — `build_dataset.py` (tự động)
+### Bước 4 — Gộp vào dataset
 
-Đọc `labels.csv`, bỏ track có `pid = -1`, copy ảnh thành dataset chuẩn
-Market-1501:
+Bấm *Hoàn tất & gộp vào dataset*. Server đọc nhãn, copy ảnh thành Market-1501:
 
 - **Tên file:** `{pid:04d}_c{cam}s1_{frame:06d}_{k:02d}.jpg`
-- **Chia train/test theo identity:**
-  - Người chỉ xuất hiện ở **1 camera** → luôn vào train.
-  - Người xuất hiện ở **≥2 camera** → 30% (TEST_RATIO) vào test, còn lại
-    train. Người trong test **không bao giờ** xuất hiện trong train.
-- **Tập test:** mỗi camera lấy 1 ảnh làm **query**, còn lại vào **gallery**.
+- **Chia theo identity:**
+  - Người mới **≥2 camera** → thành identity; ~30% (`TEST_RATIO`) vào **test**,
+    còn lại **train**. Người trong test không xuất hiện trong train.
+  - Người mới **chỉ 1 camera** → đưa vào **gallery làm distractor** (chống
+    camera-bias), không thành identity train. (Đổi `SINGLE_CAM_MODE="drop"` để
+    bỏ hẳn.)
+  - Người **đã có** trong dataset → bổ sung thêm ảnh vào đúng split cũ.
+- Mỗi identity lưu 1 **ảnh đại diện** ở `myreid/_identities/pid_XXXX.jpg`.
 
-⚠️ Nếu không có người nào xuất hiện ở ≥2 camera, script cảnh báo —
-tập test sẽ rỗng, không đánh giá cross-camera được.
+Gộp xong: **xóa sạch** `crops/`, `montages/`, `labels.csv` và video đã xử lý;
+chỉ giữ `myreid/` lớn dần. Màn idle hiện thống kê "sức khỏe dataset" (mỗi
+identity ở mấy camera, tỉ lệ ≥2 camera).
 
----
+### Quản lý dataset — nút 🗂 **Dataset** (mọi lúc)
 
-## 5. Thêm dữ liệu nhiều đợt (batch)
-
-Pipeline hỗ trợ **tích lũy dataset** — mỗi lần có video mới:
-
-```
-Lần 1 (12/06): video vào → extract → montage → label → build
-Lần 2 (15/06): video MỚI vào → extract → montage → label → build
-                                                            ↑
-                                              dataset to hơn lần 1
-```
-
-Cơ chế:
-- Mỗi đợt extract tạo thư mục riêng theo ngày (`cam1_b20260612`,
-  `cam1_b20260615`) — **không bao giờ đụng dữ liệu cũ**.
-- `label_manual.py` mở lên tự phát hiện track mới và **chỉ thêm** vào
-  `labels.csv`, nhãn đã gán giữ nguyên.
-- Khi label batch mới: người **đã từng xuất hiện** ở batch cũ → gán đúng
-  PID cũ của họ (xem panel "PID đã gán"); người mới → PID mới.
-- `build_dataset.py` mỗi lần chạy xóa `myreid/` cũ và build lại từ
-  **toàn bộ** các batch.
+- Lưới tất cả ID (avatar + số ảnh + số camera), tìm theo ID, lọc *người thật /
+  1 camera / distractor*.
+- Bấm 1 ID → xem **mọi ảnh** theo split (train/query/gallery) & camera.
+- **Kéo chuột chọn vùng** nhiều ảnh → xóa hàng loạt; đặt ảnh đại diện; xóa hẳn
+  cả người.
 
 ---
 
-## 6. Lỗi thường gặp
+## 4. Cấu trúc thư mục
 
-| Hiện tượng | Nguyên nhân / cách xử lý |
+```
+ReID/
+├── label_server.py       # ⭐ web app điều phối toàn bộ pipeline
+├── label_ui.html         # giao diện web
+├── extract_crops.py      # Bước 1: cắt crop theo track (ByteTrack)
+├── make_montages.py      # Bước 2: ghép ảnh lưới mỗi track
+├── extract_frame.py      # lấy 1 frame video cho trình vẽ zone
+├── head_detect.py / .pt  # model detect đầu người (KHÔNG SỬA)
+├── scale_box.py          # mở rộng box đầu → vùng upbody (KHÔNG SỬA)
+│
+├── video/                # 📂 ĐẶT VIDEO VÀO ĐÂY  (không commit)
+├── zones.json            # zone (ROI) theo camera         (tự sinh)
+├── crops/                # ảnh crop theo track             (TẠM, tự sinh)
+│   └── cam1/track0001/f000008.jpg ...
+├── montages/             # ảnh lưới để gán nhãn            (TẠM, tự sinh)
+├── labels.csv            # nhãn đợt hiện tại               (TẠM, tự sinh)
+│
+└── myreid/               # 🎯 DATASET Market-1501          (GIỮ, không commit)
+    ├── bounding_box_train/
+    ├── query/
+    ├── bounding_box_test/   # gồm cả distractor (pid ≥ 100000)
+    └── _identities/         # ảnh đại diện mỗi ID (pid_XXXX.jpg)
+```
+
+> Các thư mục dữ liệu (`video/`, `crops/`, `montages/`, `myreid/`) và `labels.csv`
+> đã được `.gitignore` — repo chỉ chứa code + model.
+
+---
+
+## 5. Cấu hình
+
+Mở **`label_server.py`**, sửa block CONFIG ở đầu file:
+
+| Biến | Mặc định | Ý nghĩa |
+|---|---|---|
+| `SAVE_EVERY` | 8 | lưu 1 crop mỗi N frame (tracker vẫn chạy mọi frame) |
+| `MIN_HEIGHT` | 80 | bỏ crop thấp hơn N px (người quá xa) |
+| `MAX_PER_TRACK` | 25 | tối đa số ảnh mỗi track |
+| `MIN_GAP` | 24 | cách tối thiểu N frame giữa 2 ảnh cùng track (chống trùng) |
+| `MONTAGE_MIN_IMAGES` | 3 | track ít hơn N ảnh sẽ không tạo montage |
+| `TEST_RATIO` | 0.3 | tỉ lệ identity (≥2 cam) đưa vào test khi gộp |
+| `SINGLE_CAM_MODE` | `"distractor"` | người 1 camera: `distractor` (vào gallery) hoặc `drop` (bỏ) |
+| `HOST` / `PORT` | 127.0.0.1 / 8000 | địa chỉ web server |
+
+---
+
+## 6. Thu thập nhiều đợt (tích lũy)
+
+```
+Đợt 1: video → crop → montage → gán ID → gộp
+Đợt 2: video MỚI → crop → montage → gán ID → gộp   (myreid/ to hơn đợt 1)
+```
+
+- Mỗi lần Crop **đánh số track nối tiếp** trong `crops/cam{C}/` — không đè dữ
+  liệu cũ.
+- Khi gán ID đợt mới: người **đã có** → gõ đúng ID cũ (đối chiếu "👥 Người đã
+  có"); người mới → ID mới gợi ý. ID mới **không tái dùng** số đã có.
+- Mỗi lần Gộp chỉ **thêm** ảnh mới vào `myreid/`, không build lại từ đầu.
+
+---
+
+## 7. Lỗi thường gặp
+
+| Hiện tượng | Cách xử lý |
 |---|---|
-| `missing ScriptRunContext` | chạy `python label_manual.py` thay vì `streamlit run label_manual.py` |
-| `FutureWarning: ByteTrack was deprecated` | chỉ là cảnh báo thư viện supervision, không ảnh hưởng |
-| Hỏi `Xóa dữ liệu cũ và chạy lại từ đầu? [y/N]` | extract cùng cam + cùng ngày 2 lần. `y` = làm lại từ đầu, `N` = hủy. Trong dashboard dùng checkbox "Xóa dữ liệu cũ" |
-| `Model weights not found: head_detect.pt` | đặt file `head_detect.pt` cạnh `head_detect.py` |
-| Bước 1 chạy rất lâu | bình thường — detect chạy trên từng frame; máy không GPU sẽ chậm |
-| Track dính 2 người trong 1 crop | do box đầu mở rộng chồng lên người bên cạnh → Bỏ qua / Xóa ở bước 3 |
+| `Model weights not found: head_detect.pt` | đặt `head_detect.pt` cạnh `head_detect.py` |
+| `FutureWarning: ByteTrack ... deprecated` | chỉ là cảnh báo của supervision, bỏ qua |
+| Bước Crop chạy rất lâu | bình thường — detect mỗi frame; máy không GPU sẽ chậm |
+| Trình vẽ zone không hiện frame | đảm bảo có `extract_frame.py` + opencv; hard refresh trình duyệt |
+| Giao diện không cập nhật sau khi sửa | hard refresh (`Ctrl+Shift+R`) — kiểm badge phiên bản cạnh logo |
+| Crop dính 2 người trong 1 ảnh | Bỏ qua / Xóa track, hoặc xóa lẻ ảnh ở bước gán ID |
+| `tập test rỗng` | chưa có ai xuất hiện ở ≥2 camera → gán cùng người qua nhiều camera |
 
 ---
 
-## 7. Train TransReID
+## 8. Train model Re-ID
 
-Sau bước 4, trỏ config TransReID vào thư mục `myreid/` (cấu trúc giống
-hệt Market-1501: `bounding_box_train`, `query`, `bounding_box_test`).
+Sau khi gộp, trỏ config model (TransReID/OSNet…) vào thư mục `myreid/` — cấu
+trúc giống hệt Market-1501 (`bounding_box_train`, `query`, `bounding_box_test`).
+
+---
+
+## Script phụ (không bắt buộc)
+
+`pipeline.py` (dashboard Streamlit cũ), `label_manual.py` (gán nhãn Streamlit cũ),
+`build_dataset.py`, `embed_and_suggest.py` (gợi ý gộp track bằng embedding OSNet)
+là công cụ **độc lập/đời cũ**, không thuộc luồng chính `label_server.py`. Giữ lại
+để tham khảo.
